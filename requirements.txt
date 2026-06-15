@@ -16,9 +16,13 @@ cryptography>=44.0           # symmetric encryption for OAuth tokens at rest
 gunicorn>=23.0               # WSGI server used by Render
 whitenoise>=6.8              # serves static files without a separate CDN
 
+# --- Phase 1: media storage ---
+cloudinary>=1.41             # video upload -> public URLs Instagram's API needs
+
+# --- HTTP client (notifier now; Instagram/LinkedIn REST later) ---
+requests>=2.32
+
 # Added in later phases (kept here as a roadmap, commented until needed):
-# cloudinary>=1.41           # Phase 1 - media storage + public URLs
 # google-genai>=1.0          # Phase 2 - Gemini metadata generation
 # google-api-python-client   # Phase 3 - YouTube upload
 # google-auth-oauthlib       # Phase 3 - OAuth flow
-# requests>=2.32             # Phases 5/6 - Instagram & LinkedIn REST calls

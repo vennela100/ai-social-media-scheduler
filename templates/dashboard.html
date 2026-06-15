@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h2>Your videos</h2>
+    <a class="btn" href="{% url 'core:upload' %}">+ Upload video</a>
+  </div>
+
+  {% if videos %}
+    <div class="grid">
+      {% for video in videos %}
+        <div class="thumb">
+          {% if video.thumbnail_url %}
+            <img src="{{ video.thumbnail_url }}" alt="thumbnail">
+          {% else %}
+            <img src="" alt="no thumbnail">
+          {% endif %}
+          <div class="meta">
+            <div><strong>{{ video }}</strong></div>
+            <div class="muted">{{ video.uploaded_at|date:"M j, Y P" }}</div>
+            <a href="{{ video.file_url }}" target="_blank" rel="noopener">Open</a>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No videos yet. <a href="{% url 'core:upload' %}">Upload your first one.</a></p>
+  {% endif %}
+{% endblock %}

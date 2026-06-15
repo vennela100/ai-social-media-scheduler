@@ -1,15 +1,12 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <p class="muted">Phase 0 foundation is live. Upload, AI metadata, and scheduling arrive in the next phases.</p>
+  <p class="muted">Upload a video, let AI write the captions, schedule once — it publishes itself to YouTube, Instagram, and LinkedIn.</p>
 
   <div class="cards">
     <div class="card"><b>{{ video_count }}</b> videos uploaded</div>
     <div class="card"><b>{{ post_count }}</b> scheduled posts</div>
   </div>
 
-  <p>
-    <a href="/admin/">Admin</a> ·
-    <a href="/healthz/">Health check</a>
-  </p>
+  <p><a class="btn" href="{% url 'login' %}">Log in to get started</a></p>
 {% endblock %}

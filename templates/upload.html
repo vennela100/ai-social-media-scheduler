@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Upload video{% endblock %}
+
+{% block content %}
+  <h2>Upload a video</h2>
+
+  {% if upload_ready is False %}
+    <div class="msg error">
+      Cloudinary isn't configured yet (<code>CLOUDINARY_URL</code> is unset), so uploads
+      will be rejected. The form works — wire the key to enable real uploads.
+    </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Upload</button>
+    <a class="btn" href="{% url 'core:dashboard' %}">Cancel</a>
+  </form>
+{% endblock %}

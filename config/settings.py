@@ -62,6 +62,18 @@ if RENDER_EXTERNAL_HOSTNAME:
 TOKEN_ENCRYPTION_KEY = os.environ.get("TOKEN_ENCRYPTION_KEY", "")
 
 
+# --- External services ---
+# Cloudinary (Phase 1): one URL holds cloud name + key + secret. The cloudinary
+# SDK also auto-reads the CLOUDINARY_URL env var; we surface it here so view code
+# can check "is upload configured?" without importing the SDK.
+CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
+
+# Telegram failure alerts (Phase 4). Empty until the user adds the secrets;
+# notify_failure() no-ops cleanly while these are blank.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+
 # --- Applications ---
 INSTALLED_APPS = [
     "django.contrib.admin",
