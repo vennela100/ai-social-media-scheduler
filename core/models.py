@@ -143,10 +143,12 @@ class ScheduledPost(models.Model):
 
     def next_retry_delay_seconds(self) -> int:
         """
-        Return how many seconds to wait before the NEXT publish attempt, based
-        on self.retry_count (0 = before the 2nd attempt, 1 = before the 3rd...).
+        Return how many seconds to wait before the NEXT publish attempt.
 
-        This shapes how the scheduler reschedules a transiently-failed post.
+        self.retry_count here is the number of attempts that have ALREADY failed
+        (1 after the first failure, 2 after the second, ...). The scheduler waits
+        this long after the last failure before trying again.
+
         Design choices worth weighing:
           - Base delay & growth factor: a 5-min cron tick means sub-minute
             delays get rounded up anyway; pick values that span useful spreads.
@@ -155,9 +157,8 @@ class ScheduledPost(models.Model):
             backoff makes them all retry in lockstep — jitter spreads the load.
 
         TODO(you): implement the backoff. A common shape is:
-            base * (factor ** retry_count), clamped to a max, optionally + jitter.
-        Replace the placeholder below.
+            base * (factor ** (retry_count - 1)), clamped to a max, +/- jitter.
+        Until you do, the scheduler falls back to "retry on the next tick"
+        (no backoff) and logs a warning — so it works, just not optimally.
         """
-        # Placeholder so the rest of the project imports cleanly; replace with
-        # your chosen backoff strategy.
         raise NotImplementedError("Implement next_retry_delay_seconds()")
