@@ -1,0 +1,28 @@
+# --- Secrets: NEVER commit these ---
+.env
+*.env
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# --- Django ---
+db.sqlite3
+db.sqlite3-journal
+/staticfiles/
+media/
+*.log
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Local tooling ---
+.claude/settings.local.json

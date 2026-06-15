@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <p class="muted">Phase 0 foundation is live. Upload, AI metadata, and scheduling arrive in the next phases.</p>
+
+  <div class="cards">
+    <div class="card"><b>{{ video_count }}</b> videos uploaded</div>
+    <div class="card"><b>{{ post_count }}</b> scheduled posts</div>
+  </div>
+
+  <p>
+    <a href="/admin/">Admin</a> ·
+    <a href="/healthz/">Health check</a>
+  </p>
+{% endblock %}

@@ -1,0 +1,24 @@
+# --- Core framework ---
+Django>=5.2,<5.3
+
+# --- Database ---
+# psycopg3 is the modern driver; binary extra avoids needing local Postgres dev headers.
+psycopg[binary]>=3.2
+dj-database-url>=2.3          # parses DATABASE_URL into Django's DATABASES dict
+
+# --- Config / secrets ---
+python-dotenv>=1.0            # loads .env locally; no-op in prod where env vars are real
+
+# --- Security ---
+cryptography>=44.0           # symmetric encryption for OAuth tokens at rest
+
+# --- Deployment (Render) ---
+gunicorn>=23.0               # WSGI server used by Render
+whitenoise>=6.8              # serves static files without a separate CDN
+
+# Added in later phases (kept here as a roadmap, commented until needed):
+# cloudinary>=1.41           # Phase 1 - media storage + public URLs
+# google-genai>=1.0          # Phase 2 - Gemini metadata generation
+# google-api-python-client   # Phase 3 - YouTube upload
+# google-auth-oauthlib       # Phase 3 - OAuth flow
+# requests>=2.32             # Phases 5/6 - Instagram & LinkedIn REST calls
