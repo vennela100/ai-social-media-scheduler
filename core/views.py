@@ -29,14 +29,14 @@ logger = logging.getLogger("scheduler")
 
 
 def home(request):
-    """Public landing page. Authenticated users are sent to the dashboard."""
+    """Front door. Logged in -> the app; logged out -> the login page.
+
+    This is a private single-user tool, so there's no public marketing landing:
+    the root simply routes to the right place.
+    """
     if request.user.is_authenticated:
         return redirect("core:dashboard")
-    context = {
-        "video_count": Video.objects.count(),
-        "post_count": ScheduledPost.objects.count(),
-    }
-    return render(request, "home.html", context)
+    return redirect("login")
 
 
 @login_required
