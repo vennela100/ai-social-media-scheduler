@@ -18,6 +18,9 @@ urlpatterns = [
     path("connections/youtube/connect/", views.youtube_connect, name="youtube_connect"),
     path("connections/youtube/callback/", views.youtube_callback, name="youtube_callback"),
     path("connections/youtube/disconnect/", views.youtube_disconnect, name="youtube_disconnect"),
+    path("connections/instagram/connect/", views.instagram_connect, name="instagram_connect"),
+    path("connections/instagram/callback/", views.instagram_callback, name="instagram_callback"),
+    path("connections/instagram/disconnect/", views.instagram_disconnect, name="instagram_disconnect"),
     # Scheduling
     path("schedule/", views.schedule_post, name="schedule_post"),
     # Liveness check: 200 only if a trivial DB query succeeds.

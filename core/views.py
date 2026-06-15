@@ -14,8 +14,9 @@ from django.db import connection
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.crypto import get_random_string
 
-from . import ai, youtube
+from . import ai, instagram, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -170,7 +171,11 @@ def connections(request):
     return render(
         request,
         "connections.html",
-        {"accounts": accounts, "youtube_ready": youtube.is_configured()},
+        {
+            "accounts": accounts,
+            "youtube_ready": youtube.is_configured(),
+            "instagram_ready": instagram.is_configured(),
+        },
     )
 
 
@@ -219,6 +224,55 @@ def youtube_disconnect(request):
     if request.method == "POST":
         SocialAccount.objects.filter(user=request.user, platform="youtube").delete()
         messages.success(request, "YouTube disconnected.")
+    return redirect("core:connections")
+
+
+@login_required
+def instagram_connect(request):
+    """Kick off the Facebook/Instagram OAuth flow."""
+    if not instagram.is_configured():
+        messages.error(request, "Instagram OAuth isn't configured (META_APP_ID/SECRET).")
+        return redirect("core:connections")
+
+    state = get_random_string(32)
+    request.session["instagram_oauth_state"] = state
+    redirect_uri = request.build_absolute_uri(reverse("core:instagram_callback"))
+    return redirect(instagram.build_auth_url(redirect_uri, state))
+
+
+@login_required
+def instagram_callback(request):
+    """Handle Facebook's redirect: exchange code, store the long-lived token."""
+    if request.GET.get("error"):
+        messages.error(request, f"Instagram authorization was denied: {request.GET.get('error_description', request.GET['error'])}.")
+        return redirect("core:connections")
+
+    expected = request.session.pop("instagram_oauth_state", None)
+    if not expected or request.GET.get("state") != expected:
+        messages.error(request, "Instagram connection failed: state mismatch. Try again.")
+        return redirect("core:connections")
+
+    redirect_uri = request.build_absolute_uri(reverse("core:instagram_callback"))
+    try:
+        short_token = instagram.exchange_code(redirect_uri, request.GET["code"])
+        long_token, expires_in = instagram.long_lived_token(short_token)
+        instagram.save_account(request.user, long_token, expires_in)
+    except Exception as exc:
+        logger.error("Instagram OAuth callback failed: %s", exc)
+        detail = f" Details: {exc}" if settings.DEBUG else ""
+        messages.error(request, f"Could not connect Instagram. Please try again.{detail}")
+        return redirect("core:connections")
+
+    messages.success(request, "Instagram connected.")
+    return redirect("core:connections")
+
+
+@login_required
+def instagram_disconnect(request):
+    """Remove the stored Instagram connection."""
+    if request.method == "POST":
+        SocialAccount.objects.filter(user=request.user, platform="instagram").delete()
+        messages.success(request, "Instagram disconnected.")
     return redirect("core:connections")
 
 

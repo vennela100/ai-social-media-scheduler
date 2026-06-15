@@ -16,7 +16,7 @@ import logging
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
-from . import youtube
+from . import instagram, youtube
 from .models import ScheduledPost
 from .notifications import notify_failure
 
@@ -28,6 +28,17 @@ STUCK_PROCESSING_MINUTES = 30
 
 
 # --- Per-platform publishers: each takes a post, returns the platform post id ---
+
+def _caption_for(post: ScheduledPost) -> str:
+    """A single caption blob for platforms that take one (Instagram, LinkedIn)."""
+    if post.final_caption:
+        return post.final_caption
+    ai = post.ai_content
+    if ai:
+        parts = [p for p in (ai.generated_title, ai.generated_description, ai.generated_hashtags) if p]
+        return "\n\n".join(parts)
+    return post.video.original_filename or ""
+
 
 def _publish_youtube(post: ScheduledPost) -> str:
     account = post.social_account
@@ -46,9 +57,15 @@ def _publish_youtube(post: ScheduledPost) -> str:
     )
 
 
+def _publish_instagram(post: ScheduledPost) -> str:
+    return instagram.publish(
+        post.social_account, video_url=post.video.file_url, caption=_caption_for(post)
+    )
+
+
 PUBLISHERS = {
     "youtube": _publish_youtube,
-    # "instagram": _publish_instagram,  # Phase 5
+    "instagram": _publish_instagram,
     # "linkedin": _publish_linkedin,    # Phase 6
 }
 

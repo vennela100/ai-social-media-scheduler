@@ -39,9 +39,24 @@
     <div class="card conn reveal">
       <div class="conn-top">
         <span class="conn-logo instagram"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"></rect><circle cx="12" cy="12" r="4"></circle><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"></circle></svg></span>
-        <div><h3>Instagram</h3><div class="status-line">Phase 5</div></div>
+        <div><h3>Instagram</h3>
+          {% if accounts.instagram %}<div class="status-line"><span class="pill published">Connected</span></div>
+          {% else %}<div class="status-line">Not connected</div>{% endif %}
+        </div>
       </div>
-      <div class="helptext">Coming soon — needs Meta app review.</div>
+      {% if accounts.instagram %}
+        {% if accounts.instagram.token_expires_at %}<div class="helptext">Token expires {{ accounts.instagram.token_expires_at|date:"M j" }} · reconnect before then</div>{% endif %}
+        <form method="post" action="{% url 'core:instagram_disconnect' %}">{% csrf_token %}
+          <button class="btn btn-ghost" type="submit">Disconnect</button>
+        </form>
+      {% elif instagram_ready %}
+        <a class="btn btn-primary" href="{% url 'core:instagram_connect' %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+          Connect
+        </a>
+      {% else %}
+        <div class="helptext">Needs Meta app review + <code>META_APP_ID/SECRET</code>.</div>
+      {% endif %}
     </div>
 
     <!-- LinkedIn -->

@@ -77,6 +77,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 
+# Meta / Instagram Graph API (Phase 5): from a Facebook App. Empty until set;
+# core.instagram gates on these. Publishing needs instagram_content_publish
+# (App Review) + an IG Business account linked to a Facebook Page.
+META_APP_ID = os.environ.get("META_APP_ID", "")
+META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
+
 # Telegram failure alerts (Phase 4). Empty until the user adds the secrets;
 # notify_failure() no-ops cleanly while these are blank.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
