@@ -72,6 +72,11 @@ CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
 # core.ai.generate_metadata() raises a clear error rather than calling the SDK.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+# Google / YouTube OAuth (Phase 3): from a Google Cloud project's OAuth client
+# (type "Web application"). Empty until set; core.youtube gates on these.
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+
 # Telegram failure alerts (Phase 4). Empty until the user adds the secrets;
 # notify_failure() no-ops cleanly while these are blank.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")

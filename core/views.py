@@ -12,10 +12,16 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 
-from . import ai
-from .forms import AIContentForm, GenerateMetadataForm, VideoUploadForm
-from .models import AIContent, ScheduledPost, Video
+from . import ai, youtube
+from .forms import (
+    AIContentForm,
+    GenerateMetadataForm,
+    ScheduledPostForm,
+    VideoUploadForm,
+)
+from .models import AIContent, ScheduledPost, SocialAccount, Video
 from .storage import is_configured, upload_video
 
 logger = logging.getLogger("scheduler")
@@ -34,9 +40,13 @@ def home(request):
 
 @login_required
 def dashboard(request):
-    """List the signed-in user's uploaded videos."""
+    """List the signed-in user's uploaded videos and scheduled posts."""
     videos = Video.objects.filter(user=request.user)
-    return render(request, "dashboard.html", {"videos": videos})
+    posts = (
+        ScheduledPost.objects.filter(video__user=request.user)
+        .select_related("video", "social_account")
+    )
+    return render(request, "dashboard.html", {"videos": videos, "posts": posts})
 
 
 @login_required
@@ -150,6 +160,76 @@ def aicontent_edit(request, pk):
         form = AIContentForm(instance=content)
 
     return render(request, "aicontent_edit.html", {"form": form, "content": content})
+
+
+@login_required
+def connections(request):
+    """Show connected platform accounts and connect/disconnect controls."""
+    accounts = {a.platform: a for a in SocialAccount.objects.filter(user=request.user)}
+    return render(
+        request,
+        "connections.html",
+        {"accounts": accounts, "youtube_ready": youtube.is_configured()},
+    )
+
+
+@login_required
+def youtube_connect(request):
+    """Kick off the Google OAuth flow."""
+    if not youtube.is_configured():
+        messages.error(request, "YouTube OAuth isn't configured (GOOGLE_OAUTH_CLIENT_ID/SECRET).")
+        return redirect("core:connections")
+
+    redirect_uri = request.build_absolute_uri(reverse("core:youtube_callback"))
+    auth_url, state = youtube.build_auth_url(redirect_uri)
+    request.session["youtube_oauth_state"] = state
+    return redirect(auth_url)
+
+
+@login_required
+def youtube_callback(request):
+    """Handle Google's redirect: exchange the code and store tokens."""
+    if request.GET.get("error"):
+        messages.error(request, f"YouTube authorization was denied: {request.GET['error']}.")
+        return redirect("core:connections")
+
+    state = request.session.pop("youtube_oauth_state", None)
+    redirect_uri = request.build_absolute_uri(reverse("core:youtube_callback"))
+    try:
+        creds = youtube.exchange_code(redirect_uri, request.build_absolute_uri(), state)
+        youtube.save_account(request.user, creds)
+    except Exception as exc:
+        logger.error("YouTube OAuth callback failed: %s", exc)
+        messages.error(request, "Could not connect YouTube. Please try again.")
+        return redirect("core:connections")
+
+    messages.success(request, "YouTube connected.")
+    return redirect("core:connections")
+
+
+@login_required
+def youtube_disconnect(request):
+    """Remove the stored YouTube connection."""
+    if request.method == "POST":
+        SocialAccount.objects.filter(user=request.user, platform="youtube").delete()
+        messages.success(request, "YouTube disconnected.")
+    return redirect("core:connections")
+
+
+@login_required
+def schedule_post(request):
+    """Create a ScheduledPost (status=pending) for the cron to publish later."""
+    if request.method == "POST":
+        form = ScheduledPostForm(request.POST, user=request.user)
+        if form.is_valid():
+            post = form.save(commit=False)
+            post.status = ScheduledPost.Status.PENDING
+            post.save()
+            messages.success(request, "Post scheduled.")
+            return redirect("core:dashboard")
+    else:
+        form = ScheduledPostForm(user=request.user)
+    return render(request, "schedule.html", {"form": form})
 
 
 def healthz(request):

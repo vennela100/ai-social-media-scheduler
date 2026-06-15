@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Schedule a post{% endblock %}
+
+{% block content %}
+  <h2>Schedule a post</h2>
+  <p class="muted">Choose a video and a connected account, set a UTC time. The GitHub Actions scheduler publishes it when due.</p>
+
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Schedule</button>
+    <a class="btn" href="{% url 'core:dashboard' %}">Cancel</a>
+  </form>
+{% endblock %}

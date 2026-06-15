@@ -2,7 +2,9 @@
 
 from django import forms
 
-from .models import AIContent, Platform
+from django.utils import timezone
+
+from .models import AIContent, Platform, ScheduledPost, SocialAccount, Video
 
 # --- Upload limits (decision point — tune to your needs) ---
 # Cloudinary's free tier caps a single video around 100 MB, so staying under
@@ -69,3 +71,48 @@ class AIContentForm(forms.ModelForm):
             "generated_description": "Description",
             "generated_hashtags": "Hashtags",
         }
+
+
+class ScheduledPostForm(forms.ModelForm):
+    """Schedule a video to publish to a connected account at a UTC time."""
+
+    class Meta:
+        model = ScheduledPost
+        fields = ["video", "social_account", "ai_content", "final_caption", "scheduled_time_utc"]
+        widgets = {
+            "final_caption": forms.Textarea(attrs={"rows": 5}),
+            "scheduled_time_utc": forms.DateTimeInput(
+                attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
+            ),
+        }
+        labels = {"scheduled_time_utc": "Scheduled time (UTC)"}
+        help_texts = {
+            "scheduled_time_utc": "Enter the time in UTC. Local-timezone conversion comes in Phase 7.",
+            "ai_content": "Optional — link an AI draft for reference.",
+        }
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope every choice to the signed-in user's own objects.
+        self.fields["video"].queryset = Video.objects.filter(user=user)
+        self.fields["social_account"].queryset = SocialAccount.objects.filter(user=user)
+        self.fields["ai_content"].queryset = AIContent.objects.filter(video__user=user)
+        self.fields["ai_content"].required = False
+        # The HTML datetime-local control submits without seconds/tz; accept it.
+        self.fields["scheduled_time_utc"].input_formats = ["%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"]
+
+    def clean_scheduled_time_utc(self):
+        when = self.cleaned_data["scheduled_time_utc"]
+        if when and when <= timezone.now():
+            raise forms.ValidationError("Pick a time in the future.")
+        return when
+
+    def clean(self):
+        cleaned = super().clean()
+        video = cleaned.get("video")
+        account = cleaned.get("social_account")
+        # Guard: the caption's destination account must belong to the same user
+        # as the video (querysets already enforce per-user; this catches mixups).
+        if video and account and video.user_id != account.user_id:
+            raise forms.ValidationError("Video and account belong to different users.")
+        return cleaned

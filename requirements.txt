@@ -25,6 +25,7 @@ requests>=2.32
 # --- Phase 2: AI metadata ---
 google-genai>=1.0            # Gemini 2.5 Flash metadata generation
 
-# Added in later phases (kept here as a roadmap, commented until needed):
-# google-api-python-client   # Phase 3 - YouTube upload
-# google-auth-oauthlib       # Phase 3 - OAuth flow
+# --- Phase 3: YouTube OAuth + upload ---
+google-api-python-client>=2.0   # videos.insert resumable upload
+google-auth-oauthlib>=1.2       # OAuth 2.0 web flow
+google-auth>=2.0                # credentials + token refresh

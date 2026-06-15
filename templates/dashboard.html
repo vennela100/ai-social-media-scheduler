@@ -27,4 +27,27 @@
   {% else %}
     <p class="muted">No videos yet. <a href="{% url 'core:upload' %}">Upload your first one.</a></p>
   {% endif %}
+
+  <hr>
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h2>Scheduled posts</h2>
+    <a class="btn" href="{% url 'core:schedule_post' %}">+ Schedule a post</a>
+  </div>
+  {% if posts %}
+    <table style="width:100%; border-collapse:collapse;">
+      <tr style="text-align:left; border-bottom:1px solid #8884;">
+        <th>Video</th><th>Platform</th><th>When (UTC)</th><th>Status</th>
+      </tr>
+      {% for post in posts %}
+        <tr style="border-bottom:1px solid #8882;">
+          <td>{{ post.video }}</td>
+          <td>{{ post.social_account.get_platform_display }}</td>
+          <td>{{ post.scheduled_time_utc|date:"M j, Y H:i" }}</td>
+          <td>{{ post.get_status_display }}{% if post.retry_count %} ({{ post.retry_count }} retr{{ post.retry_count|pluralize:"y,ies" }}){% endif %}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Nothing scheduled yet.</p>
+  {% endif %}
 {% endblock %}

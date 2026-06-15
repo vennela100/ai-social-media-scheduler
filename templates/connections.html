@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Connections{% endblock %}
+
+{% block content %}
+  <h2>Platform connections</h2>
+  <p class="muted">Connect an account once; the scheduler publishes on your behalf using stored, encrypted tokens.</p>
+
+  <div class="cards">
+    <div class="card">
+      <strong>YouTube</strong>
+      {% if accounts.youtube %}
+        <p class="muted">Connected{% if accounts.youtube.token_expires_at %} · token expires {{ accounts.youtube.token_expires_at|date:"M j, P" }}{% endif %}</p>
+        <form method="post" action="{% url 'core:youtube_disconnect' %}">
+          {% csrf_token %}<button type="submit">Disconnect</button>
+        </form>
+      {% else %}
+        {% if youtube_ready %}
+          <p class="muted">Not connected.</p>
+          <a class="btn" href="{% url 'core:youtube_connect' %}">Connect YouTube</a>
+        {% else %}
+          <p class="msg error">OAuth not configured yet (<code>GOOGLE_OAUTH_CLIENT_ID/SECRET</code>).</p>
+        {% endif %}
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <strong>Instagram</strong>
+      <p class="muted">Coming in Phase 5.</p>
+    </div>
+    <div class="card">
+      <strong>LinkedIn</strong>
+      <p class="muted">Coming in Phase 6.</p>
+    </div>
+  </div>
+{% endblock %}
