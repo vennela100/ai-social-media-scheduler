@@ -4,35 +4,35 @@
    ===================================================================== */
 
 :root {
-  /* Surfaces — near-black with a cool cast, layered for depth */
-  --bg: #0a0a0d;
-  --bg-grain: #0c0c10;
-  --surface: #141419;
-  --surface-2: #1c1c24;
-  --surface-3: #24242e;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.13);
+  /* Surfaces — deep navy-black, layered for depth (Midnight Cobalt) */
+  --bg: #0b0f1a;
+  --bg-grain: #0c1322;
+  --surface: #131a2a;
+  --surface-2: #1a2336;
+  --surface-3: #222d44;
+  --border: rgba(140, 165, 210, 0.10);
+  --border-strong: rgba(150, 175, 220, 0.18);
 
   /* Text */
-  --text: #f4f4f6;
-  --text-dim: #9a9aa9;
-  --text-faint: #62626f;
+  --text: #eaf0fa;
+  --text-dim: #8a98b4;
+  --text-faint: #5b6680;
 
-  /* Accent — crimson, elevated */
-  --accent: #e50914;
-  --accent-bright: #ff2630;
-  --accent-soft: rgba(229, 9, 20, 0.14);
-  --accent-glow: rgba(229, 9, 20, 0.35);
+  /* Accent — electric cobalt */
+  --accent: #2563eb;
+  --accent-bright: #3b82f6;
+  --accent-soft: rgba(59, 130, 246, 0.14);
+  --accent-glow: rgba(37, 99, 235, 0.40);
 
   /* Semantic status */
-  --ok: #2dd470;
-  --ok-soft: rgba(45, 212, 112, 0.13);
-  --warn: #f5a623;
-  --warn-soft: rgba(245, 166, 35, 0.13);
-  --info: #4d9fff;
-  --info-soft: rgba(77, 159, 255, 0.13);
-  --bad: #ff4d4d;
-  --bad-soft: rgba(255, 77, 77, 0.13);
+  --ok: #22c55e;
+  --ok-soft: rgba(34, 197, 94, 0.13);
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.13);
+  --info: #3b82f6;
+  --info-soft: rgba(59, 130, 246, 0.13);
+  --bad: #ef4444;
+  --bad-soft: rgba(239, 68, 68, 0.13);
 
   --font-display: "Bricolage Grotesque", Georgia, serif;
   --font-body: "Hanken Grotesk", system-ui, sans-serif;
@@ -57,8 +57,8 @@ body {
   min-height: 100vh;
   /* Atmospheric depth: a faint crimson aura top-left + subtle grain */
   background-image:
-    radial-gradient(900px 600px at -5% -10%, rgba(229, 9, 20, 0.10), transparent 60%),
-    radial-gradient(700px 500px at 105% 0%, rgba(77, 159, 255, 0.05), transparent 55%);
+    radial-gradient(900px 600px at -5% -10%, rgba(37, 99, 235, 0.14), transparent 60%),
+    radial-gradient(700px 500px at 105% 0%, rgba(34, 211, 238, 0.06), transparent 55%);
   background-attachment: fixed;
 }
 
@@ -80,7 +80,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .brand .logo {
   width: 38px; height: 38px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
-  background: linear-gradient(140deg, var(--accent-bright), #8b0009);
+  background: linear-gradient(140deg, var(--accent-bright), #1e3a8a);
   box-shadow: 0 6px 20px -6px var(--accent-glow);
 }
 .brand .logo svg { width: 21px; height: 21px; color: #fff; }
@@ -237,7 +237,7 @@ input[type="file"] { padding: 22px; border-style: dashed; cursor: pointer; backg
 .landing { text-align: center; max-width: 560px; }
 .landing .hero-badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-bright); font-size: 12.5px; font-weight: 600; margin-bottom: 24px; border: 1px solid rgba(229,9,20,0.25); }
 .landing h1 { font-size: clamp(36px, 7vw, 60px); font-weight: 800; line-height: 1.02; }
-.landing h1 .grad { background: linear-gradient(120deg, var(--accent-bright), #ff7a45); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.landing h1 .grad { background: linear-gradient(120deg, var(--accent-bright), #22d3ee); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .landing p { color: var(--text-dim); font-size: 17px; margin: 20px auto 30px; }
 
 /* ---------- Motion: staggered load reveal ---------- */
