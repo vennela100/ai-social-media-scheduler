@@ -169,6 +169,7 @@ USE_TZ = True
 # --- Static files ---
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"   # collectstatic target for WhiteNoise
+STATICFILES_DIRS = [BASE_DIR / "static"]  # project-level assets (app.css, etc.)
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
@@ -198,3 +199,15 @@ LOGGING = {
         "scheduler": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+# Local-only: also write logs to a file. A backgrounded runserver can buffer its
+# stdout, so a per-record-flushed file is the reliable way to read errors during
+# dev. In prod (DEBUG off) logs go to stdout, which Render / GitHub Actions capture.
+if DEBUG:
+    LOGGING["handlers"]["file"] = {
+        "class": "logging.FileHandler",
+        "filename": BASE_DIR / "debug.log",
+        "formatter": "verbose",
+    }
+    LOGGING["root"]["handlers"].append("file")
+    LOGGING["loggers"]["scheduler"]["handlers"].append("file")

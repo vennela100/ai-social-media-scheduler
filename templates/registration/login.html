@@ -1,15 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Log in{% endblock %}
+{% block title %}Log in — Creator Studio{% endblock %}
 
-{% block content %}
-  <h2>Log in</h2>
-  {% if form.errors %}
-    <div class="msg error">Wrong username or password. Try again.</div>
-  {% endif %}
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Log in</button>
-  </form>
-  <p class="muted">No account? Create one with <code>python manage.py createsuperuser</code> for now (self-serve signup is out of scope for a single-user app).</p>
+{% block auth_content %}
+  <div class="auth-card reveal">
+    <div class="brand">
+      <span class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
+      </span>
+    </div>
+    <h1>Welcome back</h1>
+    <p class="sub">Sign in to your creator workspace</p>
+
+    {% if form.errors %}
+      <div class="msg error" style="margin-bottom:18px;"><span>Wrong username or password.</span></div>
+    {% endif %}
+
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button class="btn btn-primary" type="submit" style="width:100%;justify-content:center;margin-top:6px;">Sign in</button>
+    </form>
+    <p class="helptext" style="text-align:center;margin-top:18px;">Single-user app · accounts via <code>createsuperuser</code></p>
+  </div>
 {% endblock %}

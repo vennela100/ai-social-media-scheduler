@@ -70,21 +70,27 @@ def _allow_insecure_local() -> None:
 # --- OAuth flow ---
 
 def build_auth_url(redirect_uri: str):
-    """Return (authorization_url, state) to redirect the user to Google."""
+    """
+    Return (authorization_url, state, code_verifier) to redirect the user to
+    Google. The code_verifier (PKCE) MUST be stored and passed back to
+    exchange_code(), or the token exchange fails with "Missing code verifier".
+    """
     _require_configured()
     _allow_insecure_local()
     from google_auth_oauthlib.flow import Flow
 
     flow = Flow.from_client_config(_client_config(redirect_uri), scopes=SCOPES)
     flow.redirect_uri = redirect_uri
-    return flow.authorization_url(
+    auth_url, state = flow.authorization_url(
         access_type="offline",          # get a refresh token for unattended publishing
         include_granted_scopes="true",
         prompt="consent",               # force refresh-token issuance every time
     )
+    return auth_url, state, flow.code_verifier
 
 
-def exchange_code(redirect_uri: str, authorization_response_url: str, state: str | None):
+def exchange_code(redirect_uri: str, authorization_response_url: str,
+                  state: str | None, code_verifier: str | None = None):
     """Exchange the callback URL for credentials (token + refresh_token)."""
     _require_configured()
     _allow_insecure_local()
@@ -92,6 +98,9 @@ def exchange_code(redirect_uri: str, authorization_response_url: str, state: str
 
     flow = Flow.from_client_config(_client_config(redirect_uri), scopes=SCOPES, state=state)
     flow.redirect_uri = redirect_uri
+    # Replay the PKCE verifier generated during build_auth_url().
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(authorization_response=authorization_response_url)
     return flow.credentials
 

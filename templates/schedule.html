@@ -1,14 +1,26 @@
 {% extends "base.html" %}
-{% block title %}Schedule a post{% endblock %}
+{% block title %}Schedule — Creator Studio{% endblock %}
 
 {% block content %}
-  <h2>Schedule a post</h2>
-  <p class="muted">Choose a video and a connected account, set a UTC time. The GitHub Actions scheduler publishes it when due.</p>
+  <div class="page-head reveal">
+    <div>
+      <div class="eyebrow">Publish</div>
+      <h1>Schedule a post</h1>
+      <p>Pick a video and a connected channel, set a UTC time. The cron publishes it when due.</p>
+    </div>
+  </div>
 
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Schedule</button>
-    <a class="btn" href="{% url 'core:dashboard' %}">Cancel</a>
-  </form>
+  <div class="form-card reveal">
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line><path d="M12 14v3l2 1"></path></svg>
+          Schedule
+        </button>
+        <a class="btn btn-ghost" href="{% url 'core:dashboard' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
 {% endblock %}

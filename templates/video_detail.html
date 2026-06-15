@@ -1,40 +1,57 @@
 {% extends "base.html" %}
-{% block title %}{{ video }}{% endblock %}
+{% block title %}{{ video }} — Creator Studio{% endblock %}
 
 {% block content %}
-  <p><a href="{% url 'core:dashboard' %}">&larr; Dashboard</a></p>
-  <h2>{{ video }}</h2>
+  <div class="page-head reveal">
+    <div>
+      <div class="eyebrow"><a href="{% url 'core:dashboard' %}" style="color:var(--text-faint);">← Dashboard</a></div>
+      <h1>{{ video }}</h1>
+      <p>Uploaded {{ video.uploaded_at|date:"M j, Y · H:i" }} ·
+        <a href="{{ video.file_url }}" target="_blank" rel="noopener" style="color:var(--accent-bright);">Open source ↗</a></p>
+    </div>
+  </div>
 
-  {% if video.thumbnail_url %}
-    <img src="{{ video.thumbnail_url }}" alt="thumbnail" style="max-width:320px; border-radius:10px; border:1px solid #8884;">
-  {% endif %}
-  <p class="muted">Uploaded {{ video.uploaded_at|date:"M j, Y P" }} ·
-    <a href="{{ video.file_url }}" target="_blank" rel="noopener">Open source</a></p>
+  <div class="grid" style="grid-template-columns: 320px 1fr; align-items:start;">
+    <div class="card video-card reveal" style="padding:0;">
+      <div class="thumb">
+        {% if video.thumbnail_url %}<img src="{{ video.thumbnail_url }}" alt="">
+        {% else %}<span class="ph"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2"></rect></svg></span>{% endif %}
+      </div>
+    </div>
 
-  <hr>
-  <h3>Generate AI metadata</h3>
-  {% if ai_ready is False %}
-    <div class="msg error">Gemini isn't configured yet (<code>GEMINI_API_KEY</code> unset). The form works; add the key to generate for real.</div>
-  {% endif %}
-  <form method="post" action="{% url 'core:generate' video.pk %}">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Generate</button>
-  </form>
+    <div class="card reveal">
+      <h2 style="font-size:18px;margin-bottom:6px;">Generate AI metadata</h2>
+      <p class="helptext" style="margin-bottom:16px;">Pick a platform and add a short brief — Gemini writes a tuned title, description &amp; hashtags.</p>
+      {% if ai_ready is False %}
+        <div class="msg error" style="margin-bottom:14px;"><span>Gemini not configured (<code>GEMINI_API_KEY</code>). The form works; add the key to generate.</span></div>
+      {% endif %}
+      <form method="post" action="{% url 'core:generate' video.pk %}">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button class="btn btn-primary" type="submit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"></path></svg>
+          Generate
+        </button>
+      </form>
+    </div>
+  </div>
 
-  <hr>
-  <h3>Drafts</h3>
+  <div class="section-head reveal"><h2>AI drafts</h2></div>
   {% if ai_contents %}
-    <ul>
+    <div class="grid cols-auto reveal" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));">
       {% for c in ai_contents %}
-        <li>
-          <strong>{{ c.get_platform_display }}</strong> — {{ c.generated_title|default:"(untitled)" }}
-          <a href="{% url 'core:aicontent_edit' c.pk %}">review / edit</a>
-          <span class="muted">· {{ c.ai_model_used }} · {{ c.generated_at|date:"M j, P" }}</span>
-        </li>
+        <div class="card">
+          <span class="pill processing" style="margin-bottom:10px;">{{ c.get_platform_display }}</span>
+          <h3 style="font-size:15px;margin-bottom:6px;">{{ c.generated_title|default:"(untitled)" }}</h3>
+          <p class="helptext" style="margin-bottom:14px;">{{ c.ai_model_used }} · {{ c.generated_at|date:"M j, H:i" }}</p>
+          <a class="btn btn-ghost" href="{% url 'core:aicontent_edit' c.pk %}">Review &amp; edit</a>
+        </div>
       {% endfor %}
-    </ul>
+    </div>
   {% else %}
-    <p class="muted">No drafts yet. Generate one above.</p>
+    <div class="empty reveal">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"></path></svg>
+      <p>No drafts yet. Generate one above.</p>
+    </div>
   {% endif %}
 {% endblock %}

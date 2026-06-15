@@ -1,12 +1,17 @@
 {% extends "base.html" %}
+{% block title %}Creator Studio — Schedule once, publish everywhere{% endblock %}
 
-{% block content %}
-  <p class="muted">Upload a video, let AI write the captions, schedule once — it publishes itself to YouTube, Instagram, and LinkedIn.</p>
-
-  <div class="cards">
-    <div class="card"><b>{{ video_count }}</b> videos uploaded</div>
-    <div class="card"><b>{{ post_count }}</b> scheduled posts</div>
+{% block auth_content %}
+  <div class="landing reveal">
+    <span class="hero-badge">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10l-6.1 1.2L12 17l-1.9-5.8L4 10l6.1-1.2z"></path></svg>
+      AI-powered · $0 infrastructure
+    </span>
+    <h1>Schedule once.<br><span class="grad">Publish everywhere.</span></h1>
+    <p>Upload a video, let AI write platform-perfect captions, pick a time — and it auto-publishes to YouTube, Instagram &amp; LinkedIn. Even while your laptop sleeps.</p>
+    <a class="btn btn-primary" href="{% url 'login' %}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+      Enter the studio
+    </a>
   </div>
-
-  <p><a class="btn" href="{% url 'login' %}">Log in to get started</a></p>
 {% endblock %}

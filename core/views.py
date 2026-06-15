@@ -6,6 +6,7 @@ flow (browser -> Cloudinary -> Video row). Real features build on this.
 
 import logging
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ImproperlyConfigured
@@ -181,8 +182,9 @@ def youtube_connect(request):
         return redirect("core:connections")
 
     redirect_uri = request.build_absolute_uri(reverse("core:youtube_callback"))
-    auth_url, state = youtube.build_auth_url(redirect_uri)
+    auth_url, state, code_verifier = youtube.build_auth_url(redirect_uri)
     request.session["youtube_oauth_state"] = state
+    request.session["youtube_code_verifier"] = code_verifier
     return redirect(auth_url)
 
 
@@ -194,13 +196,17 @@ def youtube_callback(request):
         return redirect("core:connections")
 
     state = request.session.pop("youtube_oauth_state", None)
+    code_verifier = request.session.pop("youtube_code_verifier", None)
     redirect_uri = request.build_absolute_uri(reverse("core:youtube_callback"))
     try:
-        creds = youtube.exchange_code(redirect_uri, request.build_absolute_uri(), state)
+        creds = youtube.exchange_code(
+            redirect_uri, request.build_absolute_uri(), state, code_verifier
+        )
         youtube.save_account(request.user, creds)
     except Exception as exc:
         logger.error("YouTube OAuth callback failed: %s", exc)
-        messages.error(request, "Could not connect YouTube. Please try again.")
+        detail = f" Details: {exc}" if settings.DEBUG else ""
+        messages.error(request, f"Could not connect YouTube. Please try again.{detail}")
         return redirect("core:connections")
 
     messages.success(request, "YouTube connected.")

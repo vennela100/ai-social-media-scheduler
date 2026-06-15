@@ -1,20 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Upload video{% endblock %}
+{% block title %}Upload — Creator Studio{% endblock %}
 
 {% block content %}
-  <h2>Upload a video</h2>
+  <div class="page-head reveal">
+    <div>
+      <div class="eyebrow">Library</div>
+      <h1>Upload a video</h1>
+      <p>It's stored on Cloudinary and gets a public URL the platforms can fetch.</p>
+    </div>
+  </div>
 
   {% if upload_ready is False %}
-    <div class="msg error">
-      Cloudinary isn't configured yet (<code>CLOUDINARY_URL</code> is unset), so uploads
-      will be rejected. The form works — wire the key to enable real uploads.
+    <div class="msg error reveal" style="margin-bottom:20px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      <span>Cloudinary isn't configured (<code>CLOUDINARY_URL</code>). The form works — add the key to enable real uploads.</span>
     </div>
   {% endif %}
 
-  <form method="post" enctype="multipart/form-data">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Upload</button>
-    <a class="btn" href="{% url 'core:dashboard' %}">Cancel</a>
-  </form>
+  <div class="form-card reveal">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          Upload
+        </button>
+        <a class="btn btn-ghost" href="{% url 'core:dashboard' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
 {% endblock %}
