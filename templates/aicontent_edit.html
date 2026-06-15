@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ content.get_platform_display }} draft{% endblock %}
+
+{% block content %}
+  <p><a href="{% url 'core:video_detail' content.video.pk %}">&larr; Back to video</a></p>
+  <h2>Review {{ content.get_platform_display }} draft</h2>
+  <p class="muted">Edit anything before scheduling. We check it against {{ content.get_platform_display }}'s limits when you save.</p>
+
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+    <a class="btn" href="{% url 'core:video_detail' content.video.pk %}">Cancel</a>
+  </form>
+{% endblock %}

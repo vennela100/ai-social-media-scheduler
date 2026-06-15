@@ -68,6 +68,10 @@ TOKEN_ENCRYPTION_KEY = os.environ.get("TOKEN_ENCRYPTION_KEY", "")
 # can check "is upload configured?" without importing the SDK.
 CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
 
+# Gemini (Phase 2): free key from https://aistudio.google.com/. Empty until set;
+# core.ai.generate_metadata() raises a clear error rather than calling the SDK.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
 # Telegram failure alerts (Phase 4). Empty until the user adds the secrets;
 # notify_failure() no-ops cleanly while these are blank.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")

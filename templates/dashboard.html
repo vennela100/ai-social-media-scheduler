@@ -17,9 +17,9 @@
             <img src="" alt="no thumbnail">
           {% endif %}
           <div class="meta">
-            <div><strong>{{ video }}</strong></div>
+            <div><strong><a href="{% url 'core:video_detail' video.pk %}">{{ video }}</a></strong></div>
             <div class="muted">{{ video.uploaded_at|date:"M j, Y P" }}</div>
-            <a href="{{ video.file_url }}" target="_blank" rel="noopener">Open</a>
+            <div class="muted">{{ video.ai_contents.count }} AI draft{{ video.ai_contents.count|pluralize }}</div>
           </div>
         </div>
       {% endfor %}

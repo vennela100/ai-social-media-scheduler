@@ -2,6 +2,8 @@
 
 from django import forms
 
+from .models import AIContent, Platform
+
 # --- Upload limits (decision point — tune to your needs) ---
 # Cloudinary's free tier caps a single video around 100 MB, so staying under
 # that avoids hard API rejections. Extensions are an allowlist: we check the
@@ -37,3 +39,33 @@ class VideoUploadForm(forms.Form):
             )
 
         return f
+
+
+class GenerateMetadataForm(forms.Form):
+    """Pick a platform and give the AI a short brief to write from."""
+
+    platform = forms.ChoiceField(choices=Platform.choices)
+    brief = forms.CharField(
+        label="What is this video about?",
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g. A 60s demo of our new CSV import feature, casual tone"}),
+        required=False,
+        help_text="Optional, but better briefs produce better captions.",
+    )
+
+
+class AIContentForm(forms.ModelForm):
+    """Review/edit AI output before it's used to schedule a post."""
+
+    class Meta:
+        model = AIContent
+        fields = ["generated_title", "generated_description", "generated_hashtags"]
+        widgets = {
+            "generated_title": forms.TextInput(),
+            "generated_description": forms.Textarea(attrs={"rows": 6}),
+            "generated_hashtags": forms.Textarea(attrs={"rows": 2}),
+        }
+        labels = {
+            "generated_title": "Title",
+            "generated_description": "Description",
+            "generated_hashtags": "Hashtags",
+        }

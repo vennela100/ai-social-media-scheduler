@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ video }}{% endblock %}
+
+{% block content %}
+  <p><a href="{% url 'core:dashboard' %}">&larr; Dashboard</a></p>
+  <h2>{{ video }}</h2>
+
+  {% if video.thumbnail_url %}
+    <img src="{{ video.thumbnail_url }}" alt="thumbnail" style="max-width:320px; border-radius:10px; border:1px solid #8884;">
+  {% endif %}
+  <p class="muted">Uploaded {{ video.uploaded_at|date:"M j, Y P" }} ·
+    <a href="{{ video.file_url }}" target="_blank" rel="noopener">Open source</a></p>
+
+  <hr>
+  <h3>Generate AI metadata</h3>
+  {% if ai_ready is False %}
+    <div class="msg error">Gemini isn't configured yet (<code>GEMINI_API_KEY</code> unset). The form works; add the key to generate for real.</div>
+  {% endif %}
+  <form method="post" action="{% url 'core:generate' video.pk %}">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Generate</button>
+  </form>
+
+  <hr>
+  <h3>Drafts</h3>
+  {% if ai_contents %}
+    <ul>
+      {% for c in ai_contents %}
+        <li>
+          <strong>{{ c.get_platform_display }}</strong> — {{ c.generated_title|default:"(untitled)" }}
+          <a href="{% url 'core:aicontent_edit' c.pk %}">review / edit</a>
+          <span class="muted">· {{ c.ai_model_used }} · {{ c.generated_at|date:"M j, P" }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No drafts yet. Generate one above.</p>
+  {% endif %}
+{% endblock %}

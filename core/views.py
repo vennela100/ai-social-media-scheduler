@@ -11,10 +11,11 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.http import JsonResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import VideoUploadForm
-from .models import ScheduledPost, Video
+from . import ai
+from .forms import AIContentForm, GenerateMetadataForm, VideoUploadForm
+from .models import AIContent, ScheduledPost, Video
 from .storage import is_configured, upload_video
 
 logger = logging.getLogger("scheduler")
@@ -67,6 +68,88 @@ def upload(request):
         form = VideoUploadForm()
 
     return render(request, "upload.html", {"form": form, "upload_ready": is_configured()})
+
+
+@login_required
+def video_detail(request, pk):
+    """Show one video, its generated metadata, and a form to generate more."""
+    video = get_object_or_404(Video, pk=pk, user=request.user)
+    return render(
+        request,
+        "video_detail.html",
+        {
+            "video": video,
+            "ai_contents": video.ai_contents.all(),
+            "form": GenerateMetadataForm(),
+            "ai_ready": ai.is_configured(),
+        },
+    )
+
+
+@login_required
+def generate(request, pk):
+    """Generate AI metadata for a video on a chosen platform, then go to review."""
+    video = get_object_or_404(Video, pk=pk, user=request.user)
+    if request.method != "POST":
+        return redirect("core:video_detail", pk=video.pk)
+
+    form = GenerateMetadataForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Pick a platform first.")
+        return redirect("core:video_detail", pk=video.pk)
+
+    platform = form.cleaned_data["platform"]
+    try:
+        result = ai.generate_metadata(
+            platform, brief=form.cleaned_data["brief"], filename=video.original_filename
+        )
+    except ImproperlyConfigured as exc:
+        messages.error(request, f"AI not ready: {exc}")
+        return redirect("core:video_detail", pk=video.pk)
+    except Exception as exc:  # SDK/network/parse error
+        logger.error("Metadata generation failed: %s", exc)
+        messages.error(request, "Generation failed. Please try again.")
+        return redirect("core:video_detail", pk=video.pk)
+
+    content = AIContent.objects.create(
+        video=video,
+        platform=platform,
+        generated_title=result["title"],
+        generated_description=result["description"],
+        generated_hashtags=result["hashtags"],
+        ai_model_used=result["model"],
+    )
+    messages.success(request, f"Generated {platform} metadata — review and edit below.")
+    return redirect("core:aicontent_edit", pk=content.pk)
+
+
+@login_required
+def aicontent_edit(request, pk):
+    """Review/edit generated metadata; validate against platform limits on save."""
+    content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
+
+    if request.method == "POST":
+        form = AIContentForm(request.POST, instance=content)
+        if form.is_valid():
+            saved = form.save(commit=False)
+            violations = ai.validate_metadata(
+                content.platform,
+                saved.generated_title,
+                saved.generated_description,
+                saved.generated_hashtags,
+            )
+            if violations:
+                # Surface limit problems but let the user keep editing.
+                for v in violations:
+                    messages.error(request, v)
+                return render(request, "aicontent_edit.html", {"form": form, "content": content})
+            saved.save()
+            messages.success(request, "Saved.")
+            return redirect("core:video_detail", pk=content.video.pk)
+    else:
+        form = AIContentForm(instance=content)
+
+    return render(request, "aicontent_edit.html", {"form": form, "content": content})
 
 
 def healthz(request):
