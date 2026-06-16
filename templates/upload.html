@@ -6,7 +6,7 @@
     <div>
       <div class="eyebrow">Library</div>
       <h1>Upload a video</h1>
-      <p>It's stored on Cloudinary and gets a public URL the platforms can fetch.</p>
+      <p>Pick the platforms and we'll draft tuned content automatically — you review and schedule on the next screen.</p>
     </div>
   </div>
 
@@ -14,6 +14,12 @@
     <div class="msg error reveal" style="margin-bottom:20px;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
       <span>Cloudinary isn't configured (<code>CLOUDINARY_URL</code>). The form works — add the key to enable real uploads.</span>
+    </div>
+  {% endif %}
+  {% if ai_ready is False %}
+    <div class="msg error reveal" style="margin-bottom:20px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+      <span>Gemini isn't configured (<code>GEMINI_API_KEY</code>). You can still upload — platform drafting will be skipped until the key is set.</span>
     </div>
   {% endif %}
 

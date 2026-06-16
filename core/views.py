@@ -4,6 +4,7 @@ Phase 1: a login-protected dashboard listing the user's videos, plus an upload
 flow (browser -> Cloudinary -> Video row). Real features build on this.
 """
 
+import datetime as dt
 import logging
 
 from django.conf import settings
@@ -84,9 +85,46 @@ def dashboard(request):
     )
 
 
+def _generate_for_platforms(video, platforms, brief):
+    """Generate + save an AIContent draft for each platform.
+
+    Returns (generated_platforms, errors). One platform failing does NOT stop
+    the others — its error is collected and surfaced inline.
+    """
+    generated, errors = [], []
+    for platform in platforms:
+        try:
+            result = ai.generate_metadata(
+                platform, brief=brief, filename=video.original_filename
+            )
+        except ImproperlyConfigured:
+            # No key → every platform would fail the same way; report once, stop.
+            errors.append("AI isn't configured (GEMINI_API_KEY) — drafts not generated.")
+            break
+        except Exception as exc:  # SDK / network / parse error for this platform only
+            logger.error("Generation failed for %s: %s", platform, exc)
+            errors.append(f"{platform.title()}: AI draft failed — retry it on the video page.")
+            continue
+
+        AIContent.objects.create(
+            video=video,
+            platform=platform,
+            generated_title=result["title"],
+            generated_description=result["description"],
+            generated_hashtags=result["hashtags"],
+            ai_model_used=result["model"],
+        )
+        generated.append(platform)
+    return generated, errors
+
+
 @login_required
 def upload(request):
-    """Handle a video upload: validate -> Cloudinary -> create Video row."""
+    """Upload a video, then auto-draft content for each chosen platform.
+
+    Flow: validate -> Cloudinary -> Video row -> AI drafts per platform ->
+    land on the video's review page where the user edits and schedules.
+    """
     if request.method == "POST":
         form = VideoUploadForm(request.POST, request.FILES)
         if form.is_valid():
@@ -95,40 +133,159 @@ def upload(request):
             except ImproperlyConfigured as exc:
                 # Cloudinary key not set yet — tell the user plainly, don't 500.
                 messages.error(request, f"Upload service not ready: {exc}")
-                return render(request, "upload.html", {"form": form})
+                return render(request, "upload.html", _upload_context(form))
             except Exception as exc:  # network / Cloudinary error
                 logger.error("Video upload failed: %s", exc)
                 messages.error(request, "Upload failed. Please try again.")
-                return render(request, "upload.html", {"form": form})
+                return render(request, "upload.html", _upload_context(form))
 
-            Video.objects.create(
+            video = Video.objects.create(
                 user=request.user,
                 file_url=result["file_url"],
                 thumbnail_url=result["thumbnail_url"],
                 original_filename=result["original_filename"],
             )
-            messages.success(request, "Video uploaded.")
-            return redirect("core:dashboard")
+
+            generated, errors = _generate_for_platforms(
+                video, form.cleaned_data["platforms"], form.cleaned_data["brief"]
+            )
+            if generated:
+                messages.success(
+                    request,
+                    f"Uploaded and drafted content for {len(generated)} platform(s). "
+                    "Review, edit, and schedule below.",
+                )
+            else:
+                messages.success(request, "Video uploaded.")
+            for err in errors:
+                messages.error(request, err)
+            return redirect("core:video_detail", pk=video.pk)
     else:
         form = VideoUploadForm()
 
-    return render(request, "upload.html", {"form": form, "upload_ready": is_configured()})
+    return render(request, "upload.html", _upload_context(form))
+
+
+def _upload_context(form):
+    return {
+        "form": form,
+        "upload_ready": is_configured(),
+        "ai_ready": ai.is_configured(),
+    }
 
 
 @login_required
 def video_detail(request, pk):
-    """Show one video, its generated metadata, and a form to generate more."""
+    """Review hub: per-platform AI drafts with inline edit + schedule controls."""
     video = get_object_or_404(Video, pk=pk, user=request.user)
+    connected = set(
+        SocialAccount.objects.filter(user=request.user).values_list("platform", flat=True)
+    )
+    # Bundle each draft with its platform limits + whether that account is
+    # connected, so the template can render hints and gate the schedule button.
+    drafts = [
+        {
+            "content": c,
+            "limits": ai.PLATFORM_LIMITS.get(c.platform, {}),
+            "connected": c.platform in connected,
+        }
+        for c in video.ai_contents.all()
+    ]
     return render(
         request,
         "video_detail.html",
         {
             "video": video,
-            "ai_contents": video.ai_contents.all(),
+            "drafts": drafts,
             "form": GenerateMetadataForm(),
             "ai_ready": ai.is_configured(),
+            "current_tz": timezone.get_current_timezone_name(),
         },
     )
+
+
+def _parse_local_datetime(raw):
+    """Parse a datetime-local string as the active (local) tz -> aware datetime."""
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            naive = dt.datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        return timezone.make_aware(naive, timezone.get_current_timezone())
+    return None
+
+
+def _final_caption(content):
+    """Assemble the caption stored on the post from the (edited) draft fields.
+
+    YouTube publishes title/description/tags separately, so its caption is just
+    the description. Instagram/LinkedIn take one text blob, so we append the
+    hashtags below the body.
+    """
+    if content.platform == "youtube":
+        return content.generated_description
+    parts = [p for p in (content.generated_description, content.generated_hashtags) if p]
+    return "\n\n".join(parts)
+
+
+@login_required
+def schedule_content(request, pk):
+    """Save the user's edits to a draft, then schedule it as a pending post."""
+    content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
+    if request.method != "POST":
+        return redirect("core:video_detail", pk=content.video.pk)
+
+    # Persist edits FIRST so they survive any validation bounce-back (the review
+    # page re-reads them straight from the row).
+    content.generated_title = request.POST.get("title", "").strip()
+    content.generated_description = request.POST.get("description", "").strip()
+    content.generated_hashtags = request.POST.get("hashtags", "").strip()
+    content.save(update_fields=["generated_title", "generated_description", "generated_hashtags"])
+
+    account = SocialAccount.objects.filter(
+        user=request.user, platform=content.platform
+    ).first()
+    if not account:
+        messages.error(
+            request,
+            f"Connect your {content.get_platform_display()} account before scheduling.",
+        )
+        return redirect("core:video_detail", pk=content.video.pk)
+
+    when = _parse_local_datetime(request.POST.get("scheduled_time", "").strip())
+    if when is None:
+        messages.error(request, "Pick a valid date and time.")
+        return redirect("core:video_detail", pk=content.video.pk)
+    if when <= timezone.now():
+        messages.error(request, "Pick a time in the future.")
+        return redirect("core:video_detail", pk=content.video.pk)
+
+    violations = ai.validate_metadata(
+        content.platform,
+        content.generated_title,
+        content.generated_description,
+        content.generated_hashtags,
+    )
+    if violations:
+        for v in violations:
+            messages.error(request, v)
+        return redirect("core:video_detail", pk=content.video.pk)
+
+    ScheduledPost.objects.create(
+        video=content.video,
+        social_account=account,
+        ai_content=content,
+        final_caption=_final_caption(content),
+        scheduled_time_utc=when,
+        status=ScheduledPost.Status.PENDING,
+    )
+    messages.success(
+        request,
+        f"Scheduled to {content.get_platform_display()} for {when:%b %d, %Y · %H:%M} UTC.",
+    )
+    return redirect("core:dashboard")
 
 
 @login_required

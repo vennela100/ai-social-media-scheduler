@@ -24,14 +24,42 @@ GEMINI_MODEL = "gemini-2.5-flash"
 PLATFORM_LIMITS = {
     "youtube": {"title": 100, "description": 5000, "max_hashtags": 15},
     "instagram": {"title": 125, "description": 2200, "max_hashtags": 30},
-    "linkedin": {"title": 150, "description": 3000, "max_hashtags": 10},
+    # LinkedIn rewards restraint — keep hashtags to a handful, not a wall.
+    "linkedin": {"title": 150, "description": 3000, "max_hashtags": 5},
 }
 
-# How each platform "feels" — steers tone so the same brief reads natively.
-PLATFORM_STYLE = {
-    "youtube": "an engaging, search-friendly YouTube title and a description that front-loads value and includes a call to subscribe",
-    "instagram": "a punchy first-line hook and a warm, emoji-friendly caption made for the feed",
-    "linkedin": "a professional, insight-led post with a credible, no-hype tone",
+# Detailed, per-platform authoring rules. These encode the playbook for each
+# network so the same brief reads natively in each place. The JSON shape stays
+# the same (title/description/hashtags); only the guidance changes.
+PLATFORM_RULES = {
+    "youtube": (
+        "Platform: YouTube.\n"
+        "- title: a click-worthy, search-friendly title (curiosity + keywords), "
+        "at most 100 characters.\n"
+        "- description: keyword-rich and skimmable. Open with a 1-2 line hook, then "
+        "a few short paragraphs of detail, then a call to subscribe. Include a line "
+        "exactly like 'Timestamps:' followed by '00:00 Intro' as a placeholder the "
+        "creator can fill in. At most 5000 characters.\n"
+        "- hashtags: 10-15 relevant tags."
+    ),
+    "instagram": (
+        "Platform: Instagram Reels.\n"
+        "- title: a punchy opening line/hook — these are the first ~125 characters "
+        "that show before the 'more' fold, so make them count.\n"
+        "- description: a full caption in a warm storytelling tone, with line breaks "
+        "for readability and tasteful emoji. At most 2200 characters.\n"
+        "- hashtags: 20-30 hashtags ordered broad -> niche -> micro."
+    ),
+    "linkedin": (
+        "Platform: LinkedIn.\n"
+        "- title: a strong first-person hook line.\n"
+        "- description: a professional post in a first-person narrative voice. Lead "
+        "with the hook line, then 3-4 short insight paragraphs, then a closing "
+        "question or call to action that invites comments. Do NOT put any links in "
+        "the body (LinkedIn suppresses reach on posts with links). At most 3000 "
+        "characters.\n"
+        "- hashtags: at most 5 relevant, professional hashtags. No hashtag spam."
+    ),
 }
 
 
@@ -51,18 +79,16 @@ def _client():
 
 
 def _build_prompt(platform: str, brief: str, filename: str) -> str:
-    limits = PLATFORM_LIMITS[platform]
-    style = PLATFORM_STYLE[platform]
+    rules = PLATFORM_RULES[platform]
     return (
-        f"You are a social media copywriter. Write {style}.\n\n"
-        f"Video brief: {brief or '(no brief provided)'}\n"
+        "You are an expert social media copywriter. Using the brief and filename "
+        "below, write content that feels native to the target platform.\n\n"
+        f"Video brief: {brief or '(no brief provided — infer a sensible topic from the filename)'}\n"
         f"Original filename: {filename or '(unknown)'}\n\n"
-        f"Constraints:\n"
-        f"- title: at most {limits['title']} characters\n"
-        f"- description: at most {limits['description']} characters\n"
-        f"- hashtags: at most {limits['max_hashtags']}, each starting with '#', no spaces inside a tag\n\n"
-        f"Respond ONLY with a JSON object of this exact shape:\n"
-        f'{{"title": "...", "description": "...", "hashtags": ["#tag1", "#tag2"]}}'
+        f"{rules}\n\n"
+        "Every hashtag must start with '#' and contain no spaces.\n\n"
+        "Respond ONLY with a JSON object of this exact shape:\n"
+        '{"title": "...", "description": "...", "hashtags": ["#tag1", "#tag2"]}'
     )
 
 

@@ -15,11 +15,24 @@ ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
 
 
 class VideoUploadForm(forms.Form):
-    """A single video file to push to Cloudinary."""
+    """A video file to push to Cloudinary, plus which platforms to draft for."""
 
     video = forms.FileField(
         label="Video file",
         help_text=f"Up to {MAX_UPLOAD_MB} MB. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+    )
+    platforms = forms.MultipleChoiceField(
+        choices=Platform.choices,
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+        label="Auto-generate content for",
+        help_text="We'll write tuned copy for each platform you tick — review and edit before scheduling.",
+    )
+    brief = forms.CharField(
+        label="What's the video about? (optional)",
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g. A 60s walkthrough of our new CSV import feature, friendly tone"}),
+        required=False,
+        help_text="One line of context sharpens the AI's output.",
     )
 
     def clean_video(self):

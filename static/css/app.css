@@ -180,6 +180,14 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .pill.failed { color: var(--bad); background: var(--bad-soft); }
 .pill.needs_reconnect { color: #ff8a3d; background: rgba(255,138,61,0.13); }
 
+/* ---------- Review & schedule draft cards ---------- */
+.draft .fld-label { display: flex; align-items: center; justify-content: space-between;
+  font-size: 12.5px; font-weight: 600; color: var(--text-dim); margin: 14px 0 6px; }
+.draft .fld-label:first-of-type { margin-top: 0; }
+.draft .fld-label .lim { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 500; }
+.draft .fld { margin-bottom: 2px; }
+.draft .draft-foot { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+
 /* ---------- Tables ---------- */
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
