@@ -358,10 +358,19 @@ def schedule_content(request, pk):
             messages.error(request, v)
         return redirect("core:video_detail", pk=content.video.pk)
 
-    # Visibility the user chose; Instagram ignores it (reels are always public).
-    visibility = request.POST.get("visibility", ScheduledPost.Visibility.PUBLIC)
-    if visibility not in ScheduledPost.Visibility.values:
-        visibility = ScheduledPost.Visibility.PUBLIC
+    # Visibility the user chose, then normalized to what the platform can ACTUALLY
+    # do — so the stored row, dashboard, and toast never claim something the
+    # publisher won't honour (and a tampered form can't store a bogus value):
+    #   Instagram → always public (reels can't be private)
+    #   LinkedIn  → only PUBLIC or CONNECTIONS, so "unlisted" collapses to private
+    V = ScheduledPost.Visibility
+    visibility = request.POST.get("visibility", V.PUBLIC)
+    if visibility not in V.values:
+        visibility = V.PUBLIC
+    if content.platform == "instagram":
+        visibility = V.PUBLIC
+    elif content.platform == "linkedin" and visibility == V.UNLISTED:
+        visibility = V.PRIVATE
 
     post = ScheduledPost.objects.create(
         video=content.video,
