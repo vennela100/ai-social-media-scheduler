@@ -1,19 +1,27 @@
 """
-Instagram (Meta Graph API) OAuth + publishing — Phase 5.
+Instagram (Instagram API with Instagram Login) OAuth + publishing — Phase 5.
 
-Publishing is a 3-step async "container" flow:
+This uses Meta's NEWER "Instagram API with Instagram login" flow (not the older
+Facebook-Page-based Graph API). The user logs in with Instagram directly — no
+Facebook Page required — and we talk to graph.instagram.com.
+
+Auth:
+  1. Send the user to instagram.com/oauth/authorize (Instagram app id + the
+     instagram_business_* scopes).
+  2. Exchange the code at api.instagram.com for a SHORT-lived token + user_id.
+  3. Swap that for a LONG-lived (~60-day) token at graph.instagram.com.
+
+Publishing is the same 3-step async "container" flow as before, but against
+graph.instagram.com/{ig-user-id}:
   1. POST /{ig-user-id}/media   (media_type=REELS, video_url=<cloudinary>, caption)
   2. GET  /{container-id}?fields=status_code  -> poll until FINISHED
   3. POST /{ig-user-id}/media_publish (creation_id=<container-id>)
 
-Auth is Facebook Login: we exchange the code for a short-lived user token, swap
-it for a long-lived (~60-day) token, find the Page the user manages and its
-linked Instagram Business account, and store the page token + IG user id.
-
-Gated on settings.META_APP_ID / META_APP_SECRET. Heavy work is plain `requests`,
-so nothing here needs importing until a real publish/connect happens.
+Gated on settings.INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET (the *Instagram* app
+credentials from the Instagram product, NOT the Facebook app id/secret).
 """
 
+import datetime as dt
 import logging
 import time
 from urllib.parse import urlencode
@@ -21,22 +29,23 @@ from urllib.parse import urlencode
 import requests
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils import timezone
 
 from .models import Platform, SocialAccount
 
 logger = logging.getLogger("scheduler")
 
 GRAPH_VERSION = "v21.0"
-GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
-OAUTH_DIALOG = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
+GRAPH = f"https://graph.instagram.com/{GRAPH_VERSION}"
+# Instagram's own OAuth endpoints (Instagram Login, not Facebook Login).
+AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize"
+TOKEN_URL = "https://api.instagram.com/oauth/access_token"
+LONG_LIVED_URL = "https://graph.instagram.com/access_token"
 
-# Permissions needed to read the Page + IG account and publish content.
+# The only permissions we need: read the account + publish content.
 SCOPES = [
-    "instagram_basic",
-    "instagram_content_publish",
-    "pages_show_list",
-    "pages_read_engagement",
-    "business_management",
+    "instagram_business_basic",
+    "instagram_business_content_publish",
 ]
 
 # Container ingestion polling. A Reel usually finishes in seconds; cap the wait
@@ -46,58 +55,65 @@ MAX_POLLS = 24  # ~2 minutes
 
 
 def is_configured() -> bool:
-    return bool(settings.META_APP_ID and settings.META_APP_SECRET)
+    return bool(settings.INSTAGRAM_APP_ID and settings.INSTAGRAM_APP_SECRET)
 
 
 def _require_configured() -> None:
     if not is_configured():
         raise ImproperlyConfigured(
-            "META_APP_ID / META_APP_SECRET are not set. Create a Facebook App, "
-            "get instagram_content_publish approved, and add them to your .env."
+            "INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET are not set. Get them from your "
+            "Meta app's Instagram product (API setup with Instagram login) and add "
+            "them to your .env."
         )
 
 
 # --- OAuth ---
 
 def build_auth_url(redirect_uri: str, state: str) -> str:
-    """URL to send the user to Facebook's consent dialog."""
+    """URL to send the user to Instagram's consent dialog."""
     _require_configured()
     params = {
-        "client_id": settings.META_APP_ID,
+        "client_id": settings.INSTAGRAM_APP_ID,
         "redirect_uri": redirect_uri,
         "state": state,
         "scope": ",".join(SCOPES),
         "response_type": "code",
     }
-    return f"{OAUTH_DIALOG}?{urlencode(params)}"
+    return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
-def exchange_code(redirect_uri: str, code: str) -> str:
-    """Exchange the OAuth code for a SHORT-lived user access token."""
+def exchange_code(redirect_uri: str, code: str) -> tuple[str, str]:
+    """Exchange the OAuth code for a SHORT-lived token. Returns (token, user_id)."""
     _require_configured()
-    r = requests.get(
-        f"{GRAPH}/oauth/access_token",
-        params={
-            "client_id": settings.META_APP_ID,
-            "client_secret": settings.META_APP_SECRET,
+    # Instagram appends "#_" to the returned code; strip it if present.
+    code = code.split("#", 1)[0]
+    r = requests.post(
+        TOKEN_URL,
+        data={
+            "client_id": settings.INSTAGRAM_APP_ID,
+            "client_secret": settings.INSTAGRAM_APP_SECRET,
+            "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
             "code": code,
         },
         timeout=30,
     )
     r.raise_for_status()
-    return r.json()["access_token"]
+    data = r.json()
+    # Some API versions wrap the result in a "data" list; handle both shapes.
+    if "access_token" not in data and isinstance(data.get("data"), list):
+        data = data["data"][0]
+    return data["access_token"], str(data["user_id"])
 
 
 def long_lived_token(short_token: str) -> tuple[str, int]:
-    """Swap a short-lived token for a long-lived one. Returns (token, expires_in)."""
+    """Swap a short-lived token for a long-lived (~60-day) one. Returns (token, expires_in)."""
     r = requests.get(
-        f"{GRAPH}/oauth/access_token",
+        LONG_LIVED_URL,
         params={
-            "grant_type": "fb_exchange_token",
-            "client_id": settings.META_APP_ID,
-            "client_secret": settings.META_APP_SECRET,
-            "fb_exchange_token": short_token,
+            "grant_type": "ig_exchange_token",
+            "client_secret": settings.INSTAGRAM_APP_SECRET,
+            "access_token": short_token,
         },
         timeout=30,
     )
@@ -106,77 +122,24 @@ def long_lived_token(short_token: str) -> tuple[str, int]:
     return data["access_token"], data.get("expires_in", 60 * 24 * 3600)
 
 
-def discover_ig_account(user_token: str) -> dict:
-    """
-    Find the user's first Page and its linked Instagram Business account.
-    Returns {page_id, page_token, ig_user_id, ig_username}. Raises if none.
-    """
-    pages = requests.get(
-        f"{GRAPH}/me/accounts",
-        params={"fields": "id,name,access_token", "access_token": user_token},
-        timeout=30,
-    )
-    pages.raise_for_status()
-    data = pages.json().get("data", [])
-    if not data:
-        raise ValueError("No Facebook Page found. Instagram publishing needs a Page.")
-
-    for page in data:
-        ig = requests.get(
-            f"{GRAPH}/{page['id']}",
-            params={"fields": "instagram_business_account{id,username}", "access_token": user_token},
-            timeout=30,
-        )
-        ig.raise_for_status()
-        iga = ig.json().get("instagram_business_account")
-        if iga:
-            return {
-                "page_id": page["id"],
-                "page_token": page["access_token"],
-                "ig_user_id": iga["id"],
-                "ig_username": iga.get("username", ""),
-            }
-    raise ValueError("No Instagram Business account linked to your Page(s).")
-
-
-def save_account(user, user_token: str, expires_in: int) -> SocialAccount:
-    """Upsert the IG SocialAccount: store the Page token + IG user id."""
-    import datetime as dt
-
-    from django.utils import timezone
-
-    info = discover_ig_account(user_token)
+def save_account(user, long_token: str, ig_user_id: str, expires_in: int) -> SocialAccount:
+    """Upsert the IG SocialAccount: store the long-lived token + IG user id."""
     expiry = timezone.now() + dt.timedelta(seconds=expires_in)
     account, _ = SocialAccount.objects.update_or_create(
         user=user,
         platform=Platform.INSTAGRAM,
         defaults={
-            # Page token is what publishes on behalf of the IG account.
-            "access_token": info["page_token"],
-            "refresh_token": user_token,  # long-lived user token, for re-deriving
-            "platform_account_id": info["ig_user_id"],
+            "access_token": long_token,
+            "refresh_token": "",  # IG long-lived tokens are refreshed, not paired
+            "platform_account_id": ig_user_id,
             "token_expires_at": expiry,
         },
     )
-    logger.info("Saved Instagram account @%s for user %s", info["ig_username"], user)
+    logger.info("Saved Instagram account %s for user %s", ig_user_id, user)
     return account
 
 
 # --- Publishing ---
-
-def check_publishing_limit(account: SocialAccount) -> int:
-    """Return remaining posts in the rolling 24h window (IG caps at ~100/24h)."""
-    r = requests.get(
-        f"{GRAPH}/{account.platform_account_id}/content_publishing_limit",
-        params={"fields": "quota_usage,config", "access_token": account.access_token},
-        timeout=30,
-    )
-    r.raise_for_status()
-    data = r.json().get("data", [{}])[0]
-    quota = data.get("config", {}).get("quota_total", 100)
-    used = data.get("quota_usage", 0)
-    return max(0, quota - used)
-
 
 def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
     """Publish a Reel via the container flow. Returns the IG media id."""

@@ -530,9 +530,9 @@ def instagram_callback(request):
 
     redirect_uri = request.build_absolute_uri(reverse("core:instagram_callback"))
     try:
-        short_token = instagram.exchange_code(redirect_uri, request.GET["code"])
+        short_token, ig_user_id = instagram.exchange_code(redirect_uri, request.GET["code"])
         long_token, expires_in = instagram.long_lived_token(short_token)
-        instagram.save_account(request.user, long_token, expires_in)
+        instagram.save_account(request.user, long_token, ig_user_id, expires_in)
     except Exception as exc:
         logger.error("Instagram OAuth callback failed: %s", exc)
         detail = f" Details: {exc}" if settings.DEBUG else ""

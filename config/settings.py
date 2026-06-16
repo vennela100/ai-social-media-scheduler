@@ -54,6 +54,13 @@ CSRF_TRUSTED_ORIGINS = [
 if RENDER_EXTERNAL_HOSTNAME:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
 
+# When the app runs behind a TLS-terminating proxy (the cloudflared tunnel used
+# for local OAuth testing, or Render in production), trust the forwarded scheme
+# and host. Without this, request.build_absolute_uri() would emit
+# http://localhost/... for OAuth redirect URIs instead of the real https://host.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+
 
 # --- Token encryption ---
 # Fernet key used to encrypt OAuth tokens before they touch the database.
@@ -77,9 +84,14 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 
-# Meta / Instagram Graph API (Phase 5): from a Facebook App. Empty until set;
-# core.instagram gates on these. Publishing needs instagram_content_publish
-# (App Review) + an IG Business account linked to a Facebook Page.
+# Instagram API with Instagram Login (Phase 5). These are the *Instagram* app
+# id/secret from the Meta app's Instagram product ("API setup with Instagram
+# login") — NOT the Facebook app id/secret. core.instagram gates on these.
+INSTAGRAM_APP_ID = os.environ.get("INSTAGRAM_APP_ID", "")
+INSTAGRAM_APP_SECRET = os.environ.get("INSTAGRAM_APP_SECRET", "")
+
+# Legacy Facebook-app credentials (kept for reference; the Instagram integration
+# now uses the Instagram-login flow above).
 META_APP_ID = os.environ.get("META_APP_ID", "")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
 
