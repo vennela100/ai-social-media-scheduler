@@ -18,6 +18,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
+from django.views.decorators.http import require_POST
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 from . import ai, instagram, linkedin, stats, youtube
 from .forms import (
@@ -85,50 +87,19 @@ def dashboard(request):
     )
 
 
-def _generate_for_platforms(video, platforms, brief):
-    """Generate + save an AIContent draft for each selected platform.
+def _create_pending_drafts(video, platforms):
+    """Create one PENDING AIContent per selected platform.
 
-    The video is uploaded to Gemini ONCE and analyzed for every platform (so the
-    AI writes from what's actually in the footage). Returns (generated, errors);
-    one platform failing does NOT stop the others.
+    Generation itself happens asynchronously: the review page fires a request
+    per draft so the three platforms generate in parallel with their own
+    spinners, rather than blocking the upload for ~10-30s.
     """
-    generated, errors = [], []
-    if not platforms:
-        return generated, errors
-
-    # Analyze the real video once, reuse the handle across platforms. Returns
-    # None on any problem → generation transparently falls back to brief-only.
-    video_file = ai.upload_for_analysis(video.file_url)
-    try:
-        for platform in platforms:
-            try:
-                result = ai.generate_metadata(
-                    platform,
-                    brief=brief,
-                    filename=video.original_filename,
-                    video_file=video_file,
-                )
-            except ImproperlyConfigured:
-                # No key → every platform fails the same way; report once, stop.
-                errors.append("AI isn't configured (GEMINI_API_KEY) — drafts not generated.")
-                break
-            except Exception as exc:  # SDK / network / parse error for this platform only
-                logger.error("Generation failed for %s: %s", platform, exc)
-                errors.append(f"{platform.title()}: AI draft failed — retry it on the video page.")
-                continue
-
-            AIContent.objects.create(
-                video=video,
-                platform=platform,
-                generated_title=result["title"],
-                generated_description=result["description"],
-                generated_hashtags=result["hashtags"],
-                ai_model_used=result["model"],
-            )
-            generated.append(platform)
-    finally:
-        ai.cleanup_analysis(video_file)
-    return generated, errors
+    for platform in platforms:
+        AIContent.objects.create(
+            video=video,
+            platform=platform,
+            generation_status=AIContent.GenStatus.PENDING,
+        )
 
 
 @login_required
@@ -158,21 +129,20 @@ def upload(request):
                 thumbnail_url=result["thumbnail_url"],
                 original_filename=result["original_filename"],
                 cloudinary_public_id=result.get("public_id", ""),
+                user_title=form.cleaned_data["title"],
+                user_description=form.cleaned_data["description"],
             )
 
-            generated, errors = _generate_for_platforms(
-                video, form.cleaned_data["platforms"], form.cleaned_data["brief"]
-            )
-            if generated:
+            platforms = form.cleaned_data["platforms"]
+            _create_pending_drafts(video, platforms)
+            if platforms:
                 messages.success(
                     request,
-                    f"Uploaded and drafted content for {len(generated)} platform(s). "
-                    "Review, edit, and schedule below.",
+                    f"Uploaded. Generating content for {len(platforms)} platform(s) — "
+                    "review, edit, and schedule below.",
                 )
             else:
                 messages.success(request, "Video uploaded.")
-            for err in errors:
-                messages.error(request, err)
             return redirect("core:video_detail", pk=video.pk)
     else:
         form = VideoUploadForm()
@@ -188,9 +158,14 @@ def _upload_context(form):
     }
 
 
+@ensure_csrf_cookie
 @login_required
 def video_detail(request, pk):
-    """Review hub: per-platform AI drafts with inline edit + schedule controls."""
+    """Review hub: per-platform AI drafts with inline edit + schedule controls.
+
+    @ensure_csrf_cookie guarantees the csrftoken cookie is set so the page's JS
+    can POST to the generate endpoint for each pending draft.
+    """
     video = get_object_or_404(Video, pk=pk, user=request.user)
     connected = set(
         SocialAccount.objects.filter(user=request.user).values_list("platform", flat=True)
@@ -213,8 +188,62 @@ def video_detail(request, pk):
             "drafts": drafts,
             "form": GenerateMetadataForm(),
             "ai_ready": ai.is_configured(),
+            "has_description": bool(video.user_description.strip()),
             "current_tz": timezone.get_current_timezone_name(),
         },
+    )
+
+
+@require_POST
+@login_required
+def generate_ai(request, pk):
+    """Generate (or regenerate) one draft from the video's title + description.
+
+    Returns JSON so the review page can fire these in parallel — one per
+    platform — each updating its own card when it resolves.
+    """
+    content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
+    video = content.video
+
+    if not ai.is_configured():
+        content.generation_status = AIContent.GenStatus.FAILED
+        content.save(update_fields=["generation_status"])
+        return JsonResponse(
+            {"ok": False, "error": "AI isn't configured (GEMINI_API_KEY)."}, status=503
+        )
+
+    try:
+        result = ai.generate_metadata(
+            content.platform,
+            title=video.user_title,
+            description=video.user_description,
+            filename=video.original_filename,
+        )
+    except Exception as exc:  # SDK / network / parse — isolate to this platform
+        logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
+        content.generation_status = AIContent.GenStatus.FAILED
+        content.save(update_fields=["generation_status"])
+        return JsonResponse(
+            {"ok": False, "error": "Generation failed. Try regenerating."}, status=502
+        )
+
+    content.generated_title = result["title"]
+    content.generated_description = result["description"]
+    content.generated_hashtags = result["hashtags"]
+    content.ai_model_used = result["model"]
+    content.generation_status = AIContent.GenStatus.DONE
+    content.save()
+
+    # Nudge the user to describe the video when they didn't — better output next time.
+    notice = "" if video.user_description.strip() else "For better results, describe your video above."
+    return JsonResponse(
+        {
+            "ok": True,
+            "title": content.generated_title,
+            "description": content.generated_description,
+            "hashtags": content.generated_hashtags,
+            "notice": notice,
+        }
     )
 
 
@@ -321,7 +350,8 @@ def schedule_content(request, pk):
 
 @login_required
 def generate(request, pk):
-    """Generate AI metadata for a video on a chosen platform, then go to review."""
+    """Add a draft for another platform. Creates a PENDING row; the review page
+    generates it (the JS picks up any pending draft and fills it in)."""
     video = get_object_or_404(Video, pk=pk, user=request.user)
     if request.method != "POST":
         return redirect("core:video_detail", pk=video.pk)
@@ -331,29 +361,12 @@ def generate(request, pk):
         messages.error(request, "Pick a platform first.")
         return redirect("core:video_detail", pk=video.pk)
 
-    platform = form.cleaned_data["platform"]
-    try:
-        result = ai.generate_metadata(
-            platform, brief=form.cleaned_data["brief"], filename=video.original_filename
-        )
-    except ImproperlyConfigured as exc:
-        messages.error(request, f"AI not ready: {exc}")
-        return redirect("core:video_detail", pk=video.pk)
-    except Exception as exc:  # SDK/network/parse error
-        logger.error("Metadata generation failed: %s", exc)
-        messages.error(request, "Generation failed. Please try again.")
-        return redirect("core:video_detail", pk=video.pk)
-
-    content = AIContent.objects.create(
+    AIContent.objects.create(
         video=video,
-        platform=platform,
-        generated_title=result["title"],
-        generated_description=result["description"],
-        generated_hashtags=result["hashtags"],
-        ai_model_used=result["model"],
+        platform=form.cleaned_data["platform"],
+        generation_status=AIContent.GenStatus.PENDING,
     )
-    messages.success(request, f"Generated {platform} metadata — review and edit below.")
-    return redirect("core:aicontent_edit", pk=content.pk)
+    return redirect("core:video_detail", pk=video.pk)
 
 
 @login_required

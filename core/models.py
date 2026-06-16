@@ -65,6 +65,11 @@ class Video(models.Model):
     # Cloudinary's public_id for this asset — kept so we can delete the remote
     # file when the user deletes the video (the URL alone is awkward to reverse).
     cloudinary_public_id = models.CharField(max_length=300, blank=True, default="")
+    # The user's own words about the video. These are the PRIMARY context the AI
+    # writes from (filename is only a fallback), and they're kept so a draft can
+    # be regenerated later without re-typing.
+    user_title = models.CharField(max_length=255, blank=True, default="")
+    user_description = models.TextField(blank=True, default="")
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -77,6 +82,11 @@ class Video(models.Model):
 class AIContent(models.Model):
     """AI-generated, platform-specific metadata for a video."""
 
+    class GenStatus(models.TextChoices):
+        PENDING = "pending", "Generating"
+        DONE = "done", "Ready"
+        FAILED = "failed", "Failed"
+
     video = models.ForeignKey(
         Video, on_delete=models.CASCADE, related_name="ai_contents"
     )
@@ -85,6 +95,12 @@ class AIContent(models.Model):
     generated_description = models.TextField(blank=True, default="")
     generated_hashtags = models.TextField(blank=True, default="")  # space/comma separated
     ai_model_used = models.CharField(max_length=100, blank=True, default="")
+    # Lifecycle for the async generation UX: rows start PENDING when a video is
+    # uploaded, the browser fires a generate request per platform, and they flip
+    # to DONE (or FAILED). Existing rows default to DONE.
+    generation_status = models.CharField(
+        max_length=10, choices=GenStatus.choices, default=GenStatus.DONE
+    )
     generated_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:

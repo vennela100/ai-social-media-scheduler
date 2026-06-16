@@ -14,6 +14,7 @@ urlpatterns = [
     path("video/<int:pk>/delete/", views.video_delete, name="video_delete"),
     path("video/<int:pk>/generate/", views.generate, name="generate"),
     path("ai/<int:pk>/edit/", views.aicontent_edit, name="aicontent_edit"),
+    path("ai/<int:pk>/generate/", views.generate_ai, name="generate_ai"),
     path("ai/<int:pk>/schedule/", views.schedule_content, name="schedule_content"),
     # Connections (OAuth)
     path("connections/", views.connections, name="connections"),

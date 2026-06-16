@@ -189,6 +189,18 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .draft .fld-label .lim { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 500; }
 .draft .fld { margin-bottom: 2px; }
 .draft .draft-foot { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.draft .draft-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.draft .draft-body { transition: opacity 0.2s; }
+.btn-regen { background: none; border: 1px solid var(--border); border-radius: 9px; color: var(--text-dim);
+  cursor: pointer; padding: 6px; display: grid; place-items: center; transition: color 0.18s, background 0.18s; }
+.btn-regen:hover { color: var(--text); background: var(--surface-2); }
+.btn-regen svg { width: 16px; height: 16px; }
+.gen-status { display: flex; align-items: center; gap: 9px; color: var(--text-dim); font-size: 13px; margin-bottom: 12px; }
+.gen-notice { color: var(--warn); background: var(--warn-soft); border-radius: var(--radius-sm);
+  padding: 8px 11px; font-size: 12.5px; margin-bottom: 12px; }
+.spinner { width: 15px; height: 15px; border: 2px solid var(--border-strong); border-top-color: var(--accent-bright);
+  border-radius: 50%; animation: spin 0.7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- Tables ---------- */
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }

@@ -12,6 +12,7 @@ clear ImproperlyConfigured rather than failing deep inside the SDK.
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 
@@ -38,37 +39,32 @@ PLATFORM_LIMITS = {
     "linkedin": {"title": 150, "description": 3000, "max_hashtags": 5},
 }
 
-# Detailed, per-platform authoring rules. These encode the playbook for each
-# network so the same brief reads natively in each place. The JSON shape stays
-# the same (title/description/hashtags); only the guidance changes.
-PLATFORM_RULES = {
+# Per-platform instruction blocks. Each asks for the platform's own JSON shape;
+# _normalize() maps those keys back onto our (title, description, hashtags) trio.
+PLATFORM_PROMPTS = {
     "youtube": (
-        "Platform: YouTube.\n"
-        "- title: a click-worthy, search-friendly title (curiosity + keywords), "
-        "at most 100 characters.\n"
-        "- description: keyword-rich and skimmable. Open with a 1-2 line hook, then "
-        "a few short paragraphs of detail, then a call to subscribe. Include a line "
-        "exactly like 'Timestamps:' followed by '00:00 Intro' as a placeholder the "
-        "creator can fill in. At most 5000 characters.\n"
-        "- hashtags: 10-15 relevant tags."
+        "Generate for YouTube:\n"
+        "- A click-worthy title (max 100 chars)\n"
+        "- A detailed SEO-optimized description with keyword-rich paragraphs "
+        "(max 5000 chars). Include a 'Timestamps:' section with '00:00 Intro' "
+        "as a placeholder.\n"
+        "- 10-15 relevant tags as a comma-separated list\n"
+        'Return as JSON: {"title": "", "description": "", "tags": ""}'
     ),
     "instagram": (
-        "Platform: Instagram Reels.\n"
-        "- title: a punchy opening line/hook — these are the first ~125 characters "
-        "that show before the 'more' fold, so make them count.\n"
-        "- description: a full caption in a warm storytelling tone, with line breaks "
-        "for readability and tasteful emoji. At most 2200 characters.\n"
-        "- hashtags: 20-30 hashtags ordered broad -> niche -> micro."
+        "Generate for Instagram:\n"
+        "- A punchy opening line (max 125 chars)\n"
+        "- Full caption with a storytelling tone and line breaks for readability\n"
+        "- 20-30 hashtags grouped broad, niche, micro — placed at the end\n"
+        'Return as JSON: {"caption": "", "hashtags": ""}'
     ),
     "linkedin": (
-        "Platform: LinkedIn.\n"
-        "- title: a strong first-person hook line.\n"
-        "- description: a professional post in a first-person narrative voice. Lead "
-        "with the hook line, then 3-4 short insight paragraphs, then a closing "
-        "question or call to action that invites comments. Do NOT put any links in "
-        "the body (LinkedIn suppresses reach on posts with links). At most 3000 "
-        "characters.\n"
-        "- hashtags: at most 5 relevant, professional hashtags. No hashtag spam."
+        "Generate a professional LinkedIn post:\n"
+        "- Strong hook line first\n"
+        "- 3-4 short insight paragraphs in a first-person tone\n"
+        "- Closing question or call to action to drive comments\n"
+        "- Max 5 relevant hashtags only, no link spam\n"
+        'Return as JSON: {"post": "", "hashtags": ""}'
     ),
 }
 
@@ -88,25 +84,51 @@ def _client():
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
-def _build_prompt(platform: str, brief: str, filename: str, analyzed: bool = False) -> str:
-    rules = PLATFORM_RULES[platform]
-    source = (
-        "Watch the attached video and base everything you write on what actually "
-        "happens in it — the visuals, on-screen text, actions, and mood. Use the "
-        "brief only as extra context."
+def _build_prompt(platform: str, title: str, description: str, filename: str, analyzed: bool = False) -> str:
+    # The user's description is the source of truth; title/filename fill gaps.
+    desc = description.strip() or f"(no description provided — infer the topic from the title/filename: {filename or 'unknown'})"
+    ctx_title = title.strip() or filename or "(untitled)"
+    watch = (
+        "Also watch the attached video and let what actually happens in it inform "
+        "the content.\n"
         if analyzed
-        else "Write from the brief and filename below."
+        else ""
     )
     return (
-        "You are an expert social media copywriter. "
-        f"{source}\n\n"
-        f"Video brief: {brief or '(no brief provided — infer the topic from the video/filename)'}\n"
-        f"Original filename: {filename or '(unknown)'}\n\n"
-        f"{rules}\n\n"
-        "Every hashtag must start with '#' and contain no spaces.\n\n"
-        "Respond ONLY with a JSON object of this exact shape:\n"
-        '{"title": "...", "description": "...", "hashtags": ["#tag1", "#tag2"]}'
+        "You are an expert social media copywriter.\n"
+        f'Based on this video description: "{desc}"\n'
+        f"Video title/context: {ctx_title}\n"
+        f"{watch}\n"
+        f"{PLATFORM_PROMPTS[platform]}"
     )
+
+
+def _split_tags(raw) -> list[str]:
+    """Tokenize tags/hashtags from a list or a comma/space string; strip '#'."""
+    if isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        items = re.split(r"[,\n\s]+", str(raw or ""))
+    return [t.strip().lstrip("#") for t in items if t.strip().strip("#")]
+
+
+def _format_tags(platform: str, tokens: list[str]) -> str:
+    """YouTube stores plain comma-separated tags; IG/LI store space-separated #tags."""
+    if platform == "youtube":
+        return ", ".join(tokens)
+    return " ".join(f"#{t}" for t in tokens)
+
+
+def _normalize(platform: str, data: dict) -> tuple[str, str, str]:
+    """Map a platform's JSON keys onto (title, description, hashtags)."""
+    if platform == "youtube":
+        return data.get("title", ""), data.get("description", ""), data.get("tags", "")
+    if platform == "instagram":
+        caption = data.get("caption", "")
+        return caption.split("\n", 1)[0][:125], caption, data.get("hashtags", "")
+    # linkedin
+    post = data.get("post", "")
+    return post.split("\n", 1)[0][:150], post, data.get("hashtags", "")
 
 
 def upload_for_analysis(video_url: str):
@@ -162,15 +184,17 @@ def cleanup_analysis(gfile) -> None:
         logger.debug("Could not delete Gemini file %s: %s", getattr(gfile, "name", "?"), exc)
 
 
-def generate_metadata(platform: str, brief: str = "", filename: str = "", video_file=None) -> dict:
+def generate_metadata(platform: str, title: str = "", description: str = "", filename: str = "", video_file=None) -> dict:
     """
-    Generate platform-specific metadata.
+    Generate platform-specific metadata, driven by the user's title + description.
 
-    If `video_file` (a Gemini file handle from upload_for_analysis) is given, the
-    model watches the actual video; otherwise it works from the brief + filename.
+    The user's words are the primary context; `filename` is only a fallback when
+    they leave the description blank. If `video_file` (a Gemini handle) is given,
+    the model also watches the footage.
 
-    Returns {"title": str, "description": str, "hashtags": str} where hashtags is
-    a single space-separated string (how the Video/AIContent model stores it).
+    Returns {"title", "description", "hashtags", "model"} already trimmed to the
+    platform's limits, where hashtags is one string (comma-separated tags for
+    YouTube, space-separated #tags for Instagram/LinkedIn).
     """
     if platform not in PLATFORM_LIMITS:
         raise ValueError(f"Unknown platform: {platform}")
@@ -178,7 +202,7 @@ def generate_metadata(platform: str, brief: str = "", filename: str = "", video_
     from google.genai import types
 
     client = _client()
-    prompt = _build_prompt(platform, brief, filename, analyzed=bool(video_file))
+    prompt = _build_prompt(platform, title, description, filename, analyzed=bool(video_file))
     contents = [video_file, prompt] if video_file else prompt
     response = client.models.generate_content(
         model=GEMINI_MODEL,
@@ -192,15 +216,17 @@ def generate_metadata(platform: str, brief: str = "", filename: str = "", video_
         logger.error("Gemini returned non-JSON for %s: %s", platform, exc)
         raise ValueError("AI response could not be parsed. Try regenerating.") from exc
 
-    hashtags = data.get("hashtags", [])
-    if isinstance(hashtags, list):
-        hashtags = " ".join(str(h).strip() for h in hashtags if str(h).strip())
+    out_title, out_desc, raw_tags = _normalize(platform, data)
+    limits = PLATFORM_LIMITS[platform]
+    # Belt-and-braces: trim to platform limits even though the prompt asks within
+    # them, so a slightly over-eager model can't produce an unschedulable draft.
+    tokens = _split_tags(raw_tags)[: limits["max_hashtags"]]
 
     logger.info("Generated %s metadata via %s", platform, GEMINI_MODEL)
     return {
-        "title": (data.get("title") or "").strip(),
-        "description": (data.get("description") or "").strip(),
-        "hashtags": hashtags.strip(),
+        "title": (out_title or "").strip()[: limits["title"]],
+        "description": (out_desc or "").strip()[: limits["description"]],
+        "hashtags": _format_tags(platform, tokens),
         "model": GEMINI_MODEL,
     }
 
@@ -222,8 +248,8 @@ def validate_metadata(platform: str, title: str, description: str, hashtags: str
     if len(description) > limits["description"]:
         violations.append(f"Description is {len(description)} chars; max {limits['description']}.")
 
-    tag_count = len([t for t in hashtags.split() if t.startswith("#")])
+    tag_count = len(_split_tags(hashtags))
     if tag_count > limits["max_hashtags"]:
-        violations.append(f"{tag_count} hashtags; max {limits['max_hashtags']}.")
+        violations.append(f"{tag_count} hashtags/tags; max {limits['max_hashtags']}.")
 
     return violations

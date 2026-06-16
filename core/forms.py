@@ -21,18 +21,23 @@ class VideoUploadForm(forms.Form):
         label="Video file",
         help_text=f"Up to {MAX_UPLOAD_MB} MB. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
     )
+    title = forms.CharField(
+        label="Video title (optional)",
+        required=False,
+        help_text="Leave blank to use the filename.",
+    )
+    description = forms.CharField(
+        label="What is this video about?",
+        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "Describe what happens in the video, the key points, the tone you want. The more you say here, the better the AI's output."}),
+        required=False,
+        help_text="This is the main thing the AI writes from — your words become the source of truth.",
+    )
     platforms = forms.MultipleChoiceField(
         choices=Platform.choices,
         widget=forms.CheckboxSelectMultiple,
         required=False,
         label="Auto-generate content for",
         help_text="We'll write tuned copy for each platform you tick — review and edit before scheduling.",
-    )
-    brief = forms.CharField(
-        label="What's the video about? (optional)",
-        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g. A 60s walkthrough of our new CSV import feature, friendly tone"}),
-        required=False,
-        help_text="One line of context sharpens the AI's output.",
     )
 
     def clean_video(self):
@@ -57,15 +62,9 @@ class VideoUploadForm(forms.Form):
 
 
 class GenerateMetadataForm(forms.Form):
-    """Pick a platform and give the AI a short brief to write from."""
+    """Pick a platform to add a draft for (writes from the video's description)."""
 
     platform = forms.ChoiceField(choices=Platform.choices)
-    brief = forms.CharField(
-        label="What is this video about?",
-        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g. A 60s demo of our new CSV import feature, casual tone"}),
-        required=False,
-        help_text="Optional, but better briefs produce better captions.",
-    )
 
 
 class AIContentForm(forms.ModelForm):

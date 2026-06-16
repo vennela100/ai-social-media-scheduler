@@ -12,6 +12,7 @@ Kept separate from the command so it can be unit-tested directly.
 
 import datetime as dt
 import logging
+import re
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
@@ -46,7 +47,8 @@ def _publish_youtube(post: ScheduledPost) -> str:
     if ai and ai.generated_title:
         title = ai.generated_title
         description = post.final_caption or ai.generated_description
-        tags = [t.lstrip("#") for t in (ai.generated_hashtags or "").split() if t.startswith("#")]
+        # Tags may be comma- or space-separated, with or without '#'.
+        tags = [t.strip().lstrip("#") for t in re.split(r"[,\n\s]+", ai.generated_hashtags or "") if t.strip().strip("#")]
     else:
         caption = post.final_caption or post.video.original_filename or "Untitled"
         title = caption.splitlines()[0][:100] if caption else "Untitled"
