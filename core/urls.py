@@ -27,8 +27,6 @@ urlpatterns = [
     path("connections/linkedin/connect/", views.linkedin_connect, name="linkedin_connect"),
     path("connections/linkedin/callback/", views.linkedin_callback, name="linkedin_callback"),
     path("connections/linkedin/disconnect/", views.linkedin_disconnect, name="linkedin_disconnect"),
-    # Scheduling
-    path("schedule/", views.schedule_post, name="schedule_post"),
     # Liveness check: 200 only if a trivial DB query succeeds.
     path("healthz/", views.healthz, name="healthz"),
 ]

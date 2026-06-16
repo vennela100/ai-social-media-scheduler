@@ -25,7 +25,6 @@ from . import ai, instagram, linkedin, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
-    ScheduledPostForm,
     VideoUploadForm,
 )
 from .models import AIContent, ScheduledPost, SocialAccount, Video
@@ -583,26 +582,6 @@ def linkedin_disconnect(request):
         SocialAccount.objects.filter(user=request.user, platform="linkedin").delete()
         messages.success(request, "LinkedIn disconnected.")
     return redirect("core:connections")
-
-
-@login_required
-def schedule_post(request):
-    """Create a ScheduledPost (status=pending) for the cron to publish later."""
-    if request.method == "POST":
-        form = ScheduledPostForm(request.POST, user=request.user)
-        if form.is_valid():
-            post = form.save(commit=False)
-            post.status = ScheduledPost.Status.PENDING
-            post.save()
-            messages.success(request, "Post scheduled.")
-            return redirect("core:dashboard")
-    else:
-        form = ScheduledPostForm(user=request.user)
-    return render(
-        request,
-        "schedule.html",
-        {"form": form, "current_tz": timezone.get_current_timezone_name()},
-    )
 
 
 def healthz(request):

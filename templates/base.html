@@ -23,7 +23,7 @@
 
       <nav class="nav">
         <div class="nav-label">Workspace</div>
-        {% url 'core:dashboard' as u_dash %}{% url 'core:upload' as u_up %}{% url 'core:connections' as u_conn %}{% url 'core:schedule_post' as u_sched %}
+        {% url 'core:dashboard' as u_dash %}{% url 'core:upload' as u_up %}{% url 'core:connections' as u_conn %}
         <a href="{{ u_dash }}" class="{% if request.path == u_dash %}active{% endif %}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
           <span>Dashboard</span>
@@ -31,10 +31,6 @@
         <a href="{{ u_up }}" class="{% if request.path == u_up %}active{% endif %}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           <span>Upload</span>
-        </a>
-        <a href="{{ u_sched }}" class="{% if request.path == u_sched %}active{% endif %}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line><path d="M12 14v3l2 1"></path></svg>
-          <span>Schedule</span>
         </a>
         <div class="nav-label">Channels</div>
         <a href="{{ u_conn }}" class="{% if request.path == u_conn %}active{% endif %}">
@@ -57,28 +53,39 @@
     </aside>
 
     <main class="main">
-      {% if messages %}
-        <div class="messages">
-          {% for message in messages %}
-            <div class="msg {{ message.tags }}">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>
-              <span>{{ message }}</span>
-            </div>
-          {% endfor %}
-        </div>
-      {% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>
 {% else %}
   <div class="auth-shell">
-    {% if messages %}
-      <div class="messages" style="max-width:420px;width:100%;">
-        {% for message in messages %}<div class="msg {{ message.tags }}"><span>{{ message }}</span></div>{% endfor %}
-      </div>
-    {% endif %}
     {% block auth_content %}{% endblock %}
   </div>
+{% endif %}
+
+{% if messages %}
+  <div class="toasts" id="toasts">
+    {% for message in messages %}
+      <div class="toast {{ message.tags }}" role="status">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          {% if 'error' in message.tags %}<circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path>
+          {% else %}<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline>{% endif %}
+        </svg>
+        <span>{{ message }}</span>
+        <button type="button" class="toast-x" aria-label="Dismiss">&times;</button>
+      </div>
+    {% endfor %}
+  </div>
+  <script>
+    (function () {
+      document.querySelectorAll("#toasts .toast").forEach(function (t, i) {
+        var close = function () { t.classList.add("out"); setTimeout(function () { t.remove(); }, 250); };
+        t.querySelector(".toast-x").addEventListener("click", close);
+        // Errors linger longer; successes auto-dismiss quickly. Stagger a touch.
+        var life = t.classList.contains("error") ? 7000 : 4000;
+        setTimeout(close, life + i * 150);
+      });
+    })();
+  </script>
 {% endif %}
 <script>
   // Tell the server our timezone so dates render in local wall-clock time.
