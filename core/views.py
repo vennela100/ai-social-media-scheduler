@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.crypto import get_random_string
 
-from . import ai, instagram, youtube
+from . import ai, instagram, linkedin, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -175,6 +175,7 @@ def connections(request):
             "accounts": accounts,
             "youtube_ready": youtube.is_configured(),
             "instagram_ready": instagram.is_configured(),
+            "linkedin_ready": linkedin.is_configured(),
         },
     )
 
@@ -273,6 +274,54 @@ def instagram_disconnect(request):
     if request.method == "POST":
         SocialAccount.objects.filter(user=request.user, platform="instagram").delete()
         messages.success(request, "Instagram disconnected.")
+    return redirect("core:connections")
+
+
+@login_required
+def linkedin_connect(request):
+    """Kick off the LinkedIn OAuth flow."""
+    if not linkedin.is_configured():
+        messages.error(request, "LinkedIn OAuth isn't configured (LINKEDIN_CLIENT_ID/SECRET).")
+        return redirect("core:connections")
+
+    state = get_random_string(32)
+    request.session["linkedin_oauth_state"] = state
+    redirect_uri = request.build_absolute_uri(reverse("core:linkedin_callback"))
+    return redirect(linkedin.build_auth_url(redirect_uri, state))
+
+
+@login_required
+def linkedin_callback(request):
+    """Handle LinkedIn's redirect: exchange code, store the member token."""
+    if request.GET.get("error"):
+        messages.error(request, f"LinkedIn authorization was denied: {request.GET.get('error_description', request.GET['error'])}.")
+        return redirect("core:connections")
+
+    expected = request.session.pop("linkedin_oauth_state", None)
+    if not expected or request.GET.get("state") != expected:
+        messages.error(request, "LinkedIn connection failed: state mismatch. Try again.")
+        return redirect("core:connections")
+
+    redirect_uri = request.build_absolute_uri(reverse("core:linkedin_callback"))
+    try:
+        token, expires_in = linkedin.exchange_code(redirect_uri, request.GET["code"])
+        linkedin.save_account(request.user, token, expires_in)
+    except Exception as exc:
+        logger.error("LinkedIn OAuth callback failed: %s", exc)
+        detail = f" Details: {exc}" if settings.DEBUG else ""
+        messages.error(request, f"Could not connect LinkedIn. Please try again.{detail}")
+        return redirect("core:connections")
+
+    messages.success(request, "LinkedIn connected.")
+    return redirect("core:connections")
+
+
+@login_required
+def linkedin_disconnect(request):
+    """Remove the stored LinkedIn connection."""
+    if request.method == "POST":
+        SocialAccount.objects.filter(user=request.user, platform="linkedin").delete()
+        messages.success(request, "LinkedIn disconnected.")
     return redirect("core:connections")
 
 

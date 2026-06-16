@@ -83,6 +83,12 @@ GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
 META_APP_ID = os.environ.get("META_APP_ID", "")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
 
+# LinkedIn OAuth (Phase 6): from a linkedin.com/developers app with the
+# "Share on LinkedIn" + "Sign In with LinkedIn using OpenID Connect" products.
+# Empty until set; core.linkedin gates on these.
+LINKEDIN_CLIENT_ID = os.environ.get("LINKEDIN_CLIENT_ID", "")
+LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET", "")
+
 # Telegram failure alerts (Phase 4). Empty until the user adds the secrets;
 # notify_failure() no-ops cleanly while these are blank.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")

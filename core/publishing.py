@@ -16,7 +16,7 @@ import logging
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
-from . import instagram, youtube
+from . import instagram, linkedin, youtube
 from .models import ScheduledPost
 from .notifications import notify_failure
 
@@ -63,10 +63,16 @@ def _publish_instagram(post: ScheduledPost) -> str:
     )
 
 
+def _publish_linkedin(post: ScheduledPost) -> str:
+    return linkedin.publish(
+        post.social_account, video_url=post.video.file_url, caption=_caption_for(post)
+    )
+
+
 PUBLISHERS = {
     "youtube": _publish_youtube,
     "instagram": _publish_instagram,
-    # "linkedin": _publish_linkedin,    # Phase 6
+    "linkedin": _publish_linkedin,
 }
 
 

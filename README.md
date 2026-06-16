@@ -45,12 +45,12 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ## Build phases
 
 - [x] **Phase 0** — Foundation: project, models, encrypted tokens, deploy config
-- [ ] **Phase 1** — Upload & storage (Cloudinary) + dashboard
-- [ ] **Phase 2** — AI metadata (Gemini)
-- [ ] **Phase 3** — YouTube integration
-- [ ] **Phase 4** — The scheduler (`publish_due_posts` + GitHub Actions)
-- [ ] **Phase 5** — Instagram
-- [ ] **Phase 6** — LinkedIn
+- [x] **Phase 1** — Upload & storage (Cloudinary) + dashboard
+- [x] **Phase 2** — AI metadata (Gemini)
+- [x] **Phase 3** — YouTube integration
+- [x] **Phase 4** — The scheduler (`publish_due_posts` + GitHub Actions)
+- [x] **Phase 5** — Instagram
+- [x] **Phase 6** — LinkedIn
 - [ ] **Phase 7** — Polish (analytics, timezone UI)
 - [ ] **Phase 8** — Optional React frontend
 
