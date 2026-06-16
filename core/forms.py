@@ -85,9 +85,9 @@ class ScheduledPostForm(forms.ModelForm):
                 attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
             ),
         }
-        labels = {"scheduled_time_utc": "Scheduled time (UTC)"}
+        labels = {"scheduled_time_utc": "Scheduled time (your local time)"}
         help_texts = {
-            "scheduled_time_utc": "Enter the time in UTC. Local-timezone conversion comes in Phase 7.",
+            "scheduled_time_utc": "Pick the time in your own timezone — we convert it to UTC for storage.",
             "ai_content": "Optional — link an AI draft for reference.",
         }
 
@@ -103,6 +103,12 @@ class ScheduledPostForm(forms.ModelForm):
 
     def clean_scheduled_time_utc(self):
         when = self.cleaned_data["scheduled_time_utc"]
+        # The datetime-local control submits a naive wall-clock value. The
+        # TimezoneMiddleware has activated the viewer's timezone, so interpret
+        # the input in THAT zone and convert to an aware (UTC-backed) datetime.
+        # make_aware uses the current timezone; the DB column stores UTC.
+        if when and timezone.is_naive(when):
+            when = timezone.make_aware(when, timezone.get_current_timezone())
         if when and when <= timezone.now():
             raise forms.ValidationError("Pick a time in the future.")
         return when

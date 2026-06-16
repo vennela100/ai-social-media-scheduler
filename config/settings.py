@@ -117,6 +117,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Activates the visitor's local timezone from the `tz` cookie so dates
+    # render in their wall-clock time (storage stays UTC). See core/middleware.py.
+    "core.middleware.TimezoneMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"

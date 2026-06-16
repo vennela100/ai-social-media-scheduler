@@ -11,12 +11,14 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
+from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-from . import ai, instagram, linkedin, youtube
+from . import ai, instagram, linkedin, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -42,13 +44,44 @@ def home(request):
 
 @login_required
 def dashboard(request):
-    """List the signed-in user's uploaded videos and scheduled posts."""
+    """List the signed-in user's videos and scheduled posts, with analytics."""
     videos = Video.objects.filter(user=request.user)
     posts = (
         ScheduledPost.objects.filter(video__user=request.user)
         .select_related("video", "social_account")
     )
-    return render(request, "dashboard.html", {"videos": videos, "posts": posts})
+
+    # One grouped query → {status: count}. Drives the headline stat cards and
+    # the status breakdown strip below, instead of len() on the whole queryset.
+    counts = {
+        row["status"]: row["count"]
+        for row in posts.values("status").annotate(count=Count("id"))
+    }
+    summary = stats.summarize(counts)
+    summary["videos"] = videos.count()
+    try:
+        summary["success_rate"] = stats.success_rate(counts)
+    except NotImplementedError:
+        # Learning-mode stub not implemented yet — show "—" rather than crash.
+        summary["success_rate"] = None
+
+    # Per-status breakdown in the model's declared order, for the pills strip.
+    breakdown = [
+        (value, label, counts.get(value, 0))
+        for value, label in ScheduledPost.Status.choices
+    ]
+
+    return render(
+        request,
+        "dashboard.html",
+        {
+            "videos": videos,
+            "posts": posts,
+            "summary": summary,
+            "breakdown": breakdown,
+            "current_tz": timezone.get_current_timezone_name(),
+        },
+    )
 
 
 @login_required
@@ -338,7 +371,11 @@ def schedule_post(request):
             return redirect("core:dashboard")
     else:
         form = ScheduledPostForm(user=request.user)
-    return render(request, "schedule.html", {"form": form})
+    return render(
+        request,
+        "schedule.html",
+        {"form": form, "current_tz": timezone.get_current_timezone_name()},
+    )
 
 
 def healthz(request):

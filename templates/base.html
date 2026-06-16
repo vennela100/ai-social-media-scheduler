@@ -80,5 +80,19 @@
     {% block auth_content %}{% endblock %}
   </div>
 {% endif %}
+<script>
+  // Tell the server our timezone so dates render in local wall-clock time.
+  // IANA names (e.g. "America/New_York") are cookie-safe, so no encoding.
+  // Reload once when first setting it, so the initial UTC render corrects itself.
+  (function () {
+    try {
+      var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (!tz) return;
+      var had = document.cookie.split("; ").some(function (c) { return c.indexOf("tz=") === 0; });
+      document.cookie = "tz=" + tz + "; path=/; max-age=31536000; samesite=Lax";
+      if (!had) location.reload();
+    } catch (e) { /* leave dates in UTC */ }
+  })();
+</script>
 </body>
 </html>
