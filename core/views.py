@@ -27,7 +27,7 @@ from .forms import (
     VideoUploadForm,
 )
 from .models import AIContent, ScheduledPost, SocialAccount, Video
-from .storage import is_configured, upload_video
+from .storage import delete_video, is_configured, upload_video
 
 logger = logging.getLogger("scheduler")
 
@@ -86,35 +86,48 @@ def dashboard(request):
 
 
 def _generate_for_platforms(video, platforms, brief):
-    """Generate + save an AIContent draft for each platform.
+    """Generate + save an AIContent draft for each selected platform.
 
-    Returns (generated_platforms, errors). One platform failing does NOT stop
-    the others — its error is collected and surfaced inline.
+    The video is uploaded to Gemini ONCE and analyzed for every platform (so the
+    AI writes from what's actually in the footage). Returns (generated, errors);
+    one platform failing does NOT stop the others.
     """
     generated, errors = [], []
-    for platform in platforms:
-        try:
-            result = ai.generate_metadata(
-                platform, brief=brief, filename=video.original_filename
-            )
-        except ImproperlyConfigured:
-            # No key → every platform would fail the same way; report once, stop.
-            errors.append("AI isn't configured (GEMINI_API_KEY) — drafts not generated.")
-            break
-        except Exception as exc:  # SDK / network / parse error for this platform only
-            logger.error("Generation failed for %s: %s", platform, exc)
-            errors.append(f"{platform.title()}: AI draft failed — retry it on the video page.")
-            continue
+    if not platforms:
+        return generated, errors
 
-        AIContent.objects.create(
-            video=video,
-            platform=platform,
-            generated_title=result["title"],
-            generated_description=result["description"],
-            generated_hashtags=result["hashtags"],
-            ai_model_used=result["model"],
-        )
-        generated.append(platform)
+    # Analyze the real video once, reuse the handle across platforms. Returns
+    # None on any problem → generation transparently falls back to brief-only.
+    video_file = ai.upload_for_analysis(video.file_url)
+    try:
+        for platform in platforms:
+            try:
+                result = ai.generate_metadata(
+                    platform,
+                    brief=brief,
+                    filename=video.original_filename,
+                    video_file=video_file,
+                )
+            except ImproperlyConfigured:
+                # No key → every platform fails the same way; report once, stop.
+                errors.append("AI isn't configured (GEMINI_API_KEY) — drafts not generated.")
+                break
+            except Exception as exc:  # SDK / network / parse error for this platform only
+                logger.error("Generation failed for %s: %s", platform, exc)
+                errors.append(f"{platform.title()}: AI draft failed — retry it on the video page.")
+                continue
+
+            AIContent.objects.create(
+                video=video,
+                platform=platform,
+                generated_title=result["title"],
+                generated_description=result["description"],
+                generated_hashtags=result["hashtags"],
+                ai_model_used=result["model"],
+            )
+            generated.append(platform)
+    finally:
+        ai.cleanup_analysis(video_file)
     return generated, errors
 
 
@@ -144,6 +157,7 @@ def upload(request):
                 file_url=result["file_url"],
                 thumbnail_url=result["thumbnail_url"],
                 original_filename=result["original_filename"],
+                cloudinary_public_id=result.get("public_id", ""),
             )
 
             generated, errors = _generate_for_platforms(
@@ -202,6 +216,23 @@ def video_detail(request, pk):
             "current_tz": timezone.get_current_timezone_name(),
         },
     )
+
+
+@login_required
+def video_delete(request, pk):
+    """Delete a video: its Cloudinary asset, its AI drafts, and its scheduled
+    posts (the last two cascade via FK). POST-only so a stray link can't wipe it.
+    """
+    video = get_object_or_404(Video, pk=pk, user=request.user)
+    if request.method != "POST":
+        return redirect("core:video_detail", pk=video.pk)
+    try:
+        delete_video(video.cloudinary_public_id)
+    except Exception as exc:  # Cloudinary hiccup shouldn't block removing the row
+        logger.warning("Cloudinary delete failed for video %s: %s", video.pk, exc)
+    video.delete()
+    messages.success(request, "Video deleted, along with its drafts and scheduled posts.")
+    return redirect("core:dashboard")
 
 
 def _parse_local_datetime(raw):

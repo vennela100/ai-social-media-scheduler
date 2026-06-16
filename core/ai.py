@@ -11,13 +11,23 @@ clear ImproperlyConfigured rather than failing deep inside the SDK.
 
 import json
 import logging
+import os
+import tempfile
+import time
 
+import requests
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 logger = logging.getLogger("scheduler")
 
 GEMINI_MODEL = "gemini-2.5-flash"
+
+# Caps for the (optional) video-analysis step. Downloading + uploading + waiting
+# for Gemini to process a clip is the slow part, so we bound each piece.
+VIDEO_DOWNLOAD_TIMEOUT = 120       # seconds to pull bytes from Cloudinary
+VIDEO_PROCESS_TIMEOUT = 90         # seconds to wait for Gemini to make it ACTIVE
+VIDEO_POLL_INTERVAL = 3            # seconds between state checks
 
 # Per-platform hard limits we generate within and validate against. These are
 # the public API/UX caps; tune if a platform changes them.
@@ -78,12 +88,19 @@ def _client():
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
-def _build_prompt(platform: str, brief: str, filename: str) -> str:
+def _build_prompt(platform: str, brief: str, filename: str, analyzed: bool = False) -> str:
     rules = PLATFORM_RULES[platform]
+    source = (
+        "Watch the attached video and base everything you write on what actually "
+        "happens in it — the visuals, on-screen text, actions, and mood. Use the "
+        "brief only as extra context."
+        if analyzed
+        else "Write from the brief and filename below."
+    )
     return (
-        "You are an expert social media copywriter. Using the brief and filename "
-        "below, write content that feels native to the target platform.\n\n"
-        f"Video brief: {brief or '(no brief provided — infer a sensible topic from the filename)'}\n"
+        "You are an expert social media copywriter. "
+        f"{source}\n\n"
+        f"Video brief: {brief or '(no brief provided — infer the topic from the video/filename)'}\n"
         f"Original filename: {filename or '(unknown)'}\n\n"
         f"{rules}\n\n"
         "Every hashtag must start with '#' and contain no spaces.\n\n"
@@ -92,9 +109,65 @@ def _build_prompt(platform: str, brief: str, filename: str) -> str:
     )
 
 
-def generate_metadata(platform: str, brief: str = "", filename: str = "") -> dict:
+def upload_for_analysis(video_url: str):
+    """Download a video from its URL and upload it to the Gemini Files API.
+
+    Returns a Gemini file handle once it's ACTIVE (ready to be referenced in a
+    prompt), or None if anything goes wrong — callers fall back to brief-only
+    generation, so this never raises into the request.
+    """
+    if not video_url:
+        return None
+    try:
+        client = _client()
+        resp = requests.get(video_url, timeout=VIDEO_DOWNLOAD_TIMEOUT, stream=True)
+        resp.raise_for_status()
+
+        suffix = os.path.splitext(video_url.split("?")[0])[1] or ".mp4"
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                for chunk in resp.iter_content(chunk_size=1 << 20):
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+
+            gfile = client.files.upload(file=tmp_path)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+        # Gemini processes video asynchronously; wait for it to become ACTIVE.
+        deadline = time.time() + VIDEO_PROCESS_TIMEOUT
+        while gfile.state.name == "PROCESSING" and time.time() < deadline:
+            time.sleep(VIDEO_POLL_INTERVAL)
+            gfile = client.files.get(name=gfile.name)
+
+        if gfile.state.name != "ACTIVE":
+            logger.warning("Gemini video not ready (state=%s); using brief only", gfile.state.name)
+            return None
+        logger.info("Video uploaded to Gemini for analysis: %s", gfile.name)
+        return gfile
+    except Exception as exc:  # download / SDK / timeout — degrade gracefully
+        logger.warning("Video analysis unavailable, falling back to brief: %s", exc)
+        return None
+
+
+def cleanup_analysis(gfile) -> None:
+    """Best-effort delete of an uploaded Gemini file (they also auto-expire ~48h)."""
+    if not gfile:
+        return
+    try:
+        _client().files.delete(name=gfile.name)
+    except Exception as exc:  # pragma: no cover - cleanup is non-critical
+        logger.debug("Could not delete Gemini file %s: %s", getattr(gfile, "name", "?"), exc)
+
+
+def generate_metadata(platform: str, brief: str = "", filename: str = "", video_file=None) -> dict:
     """
     Generate platform-specific metadata.
+
+    If `video_file` (a Gemini file handle from upload_for_analysis) is given, the
+    model watches the actual video; otherwise it works from the brief + filename.
 
     Returns {"title": str, "description": str, "hashtags": str} where hashtags is
     a single space-separated string (how the Video/AIContent model stores it).
@@ -105,9 +178,11 @@ def generate_metadata(platform: str, brief: str = "", filename: str = "") -> dic
     from google.genai import types
 
     client = _client()
+    prompt = _build_prompt(platform, brief, filename, analyzed=bool(video_file))
+    contents = [video_file, prompt] if video_file else prompt
     response = client.models.generate_content(
         model=GEMINI_MODEL,
-        contents=_build_prompt(platform, brief, filename),
+        contents=contents,
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
 

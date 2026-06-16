@@ -11,6 +11,7 @@ urlpatterns = [
     path("dashboard/", views.dashboard, name="dashboard"),
     path("upload/", views.upload, name="upload"),
     path("video/<int:pk>/", views.video_detail, name="video_detail"),
+    path("video/<int:pk>/delete/", views.video_delete, name="video_delete"),
     path("video/<int:pk>/generate/", views.generate, name="generate"),
     path("ai/<int:pk>/edit/", views.aicontent_edit, name="aicontent_edit"),
     path("ai/<int:pk>/schedule/", views.schedule_content, name="schedule_content"),

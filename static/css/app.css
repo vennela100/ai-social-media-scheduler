@@ -133,6 +133,8 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .btn-primary:hover { box-shadow: 0 14px 32px -10px var(--accent-glow); filter: brightness(1.06); }
 .btn-ghost { background: transparent; border-color: var(--border); color: var(--text-dim); }
 .btn-ghost:hover { color: var(--text); background: var(--surface); }
+.btn-danger { background: transparent; border-color: var(--bad-soft); color: var(--bad); }
+.btn-danger:hover { background: var(--bad-soft); color: var(--bad); }
 
 /* ---------- Cards / panels ---------- */
 .card {

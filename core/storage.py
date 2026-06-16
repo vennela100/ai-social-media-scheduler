@@ -73,3 +73,12 @@ def upload_video(file, *, folder: str = CLOUDINARY_FOLDER) -> dict:
         "public_id": public_id,
         "original_filename": getattr(file, "name", "") or "",
     }
+
+
+def delete_video(public_id: str) -> None:
+    """Delete a video asset from Cloudinary. No-op if we have no public_id."""
+    if not public_id:
+        return
+    _ensure_configured()
+    cloudinary.uploader.destroy(public_id, resource_type="video", invalidate=True)
+    logger.info("Deleted video from Cloudinary: %s", public_id)

@@ -62,6 +62,9 @@ class Video(models.Model):
     file_url = models.URLField(max_length=500)
     thumbnail_url = models.URLField(max_length=500, blank=True, default="")
     original_filename = models.CharField(max_length=255, blank=True, default="")
+    # Cloudinary's public_id for this asset — kept so we can delete the remote
+    # file when the user deletes the video (the URL alone is awkward to reverse).
+    cloudinary_public_id = models.CharField(max_length=300, blank=True, default="")
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
