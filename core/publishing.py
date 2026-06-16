@@ -55,11 +55,13 @@ def _publish_youtube(post: ScheduledPost) -> str:
         description = caption
         tags = []
     return youtube.publish(
-        account, video_url=post.video.file_url, title=title, description=description, tags=tags
+        account, video_url=post.video.file_url, title=title, description=description,
+        tags=tags, privacy=post.visibility,
     )
 
 
 def _publish_instagram(post: ScheduledPost) -> str:
+    # Instagram has no private-publish option; reels go out public regardless.
     return instagram.publish(
         post.social_account, video_url=post.video.file_url, caption=_caption_for(post)
     )
@@ -67,7 +69,8 @@ def _publish_instagram(post: ScheduledPost) -> str:
 
 def _publish_linkedin(post: ScheduledPost) -> str:
     return linkedin.publish(
-        post.social_account, video_url=post.video.file_url, caption=_caption_for(post)
+        post.social_account, video_url=post.video.file_url, caption=_caption_for(post),
+        visibility=post.visibility,
     )
 
 

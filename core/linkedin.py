@@ -41,10 +41,6 @@ UGC_POSTS_URL = "https://api.linkedin.com/v2/ugcPosts"
 # w_member_social is what actually authorizes posting on their behalf.
 SCOPES = ["openid", "profile", "w_member_social"]
 
-# Where a published post is visible. PUBLIC = anyone on LinkedIn (right for a
-# content-publishing tool); CONNECTIONS = 1st-degree only. See _post_visibility().
-DEFAULT_VISIBILITY = "PUBLIC"
-
 # LinkedIn truncates commentary past this; we guard against a hard API reject.
 MAX_COMMENTARY = 3000
 
@@ -184,7 +180,7 @@ def _upload_bytes(upload_url: str, token: str, video_url: str) -> None:
     up.raise_for_status()
 
 
-def _create_share(account: SocialAccount, asset_urn: str, commentary: str) -> str:
+def _create_share(account: SocialAccount, asset_urn: str, commentary: str, visibility: str) -> str:
     """Create the UGC video post. Returns the post URN."""
     body = {
         "author": _author_urn(account),
@@ -197,7 +193,7 @@ def _create_share(account: SocialAccount, asset_urn: str, commentary: str) -> st
             }
         },
         "visibility": {
-            "com.linkedin.ugc.MemberNetworkVisibility": _post_visibility(account)
+            "com.linkedin.ugc.MemberNetworkVisibility": visibility
         },
     }
     r = requests.post(
@@ -208,24 +204,17 @@ def _create_share(account: SocialAccount, asset_urn: str, commentary: str) -> st
     return r.headers.get("X-RestLi-Id") or r.json().get("id", "")
 
 
-def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
-    """Publish a video to the member's feed. Returns the LinkedIn post URN."""
+def publish(account: SocialAccount, *, video_url: str, caption: str, visibility: str = "public") -> str:
+    """Publish a video to the member's feed. Returns the LinkedIn post URN.
+
+    `visibility` is the post's chosen visibility ("public"/"unlisted"/"private");
+    LinkedIn only offers PUBLIC or CONNECTIONS, so anything non-public maps to
+    CONNECTIONS-only.
+    """
+    li_visibility = "PUBLIC" if visibility == "public" else "CONNECTIONS"
     upload_url, asset_urn = _register_upload(account)
     logger.info("LinkedIn upload registered: %s", asset_urn)
     _upload_bytes(upload_url, account.access_token, video_url)
-    post_urn = _create_share(account, asset_urn, caption)
-    logger.info("Published to LinkedIn: %s", post_urn)
+    post_urn = _create_share(account, asset_urn, caption, li_visibility)
+    logger.info("Published to LinkedIn (%s): %s", li_visibility, post_urn)
     return post_urn
-
-
-def _post_visibility(account: SocialAccount) -> str:
-    """
-    Decide who can see a published LinkedIn post: "PUBLIC" or "CONNECTIONS".
-
-    This is a genuine product decision, so it's left for you to shape (learning
-    mode). For a scheduling/reach tool the obvious default is PUBLIC, but you may
-    want CONNECTIONS-only for certain accounts, or to read it off the post/user.
-
-    Returning DEFAULT_VISIBILITY keeps publishing working today; refine as needed.
-    """
-    return DEFAULT_VISIBILITY

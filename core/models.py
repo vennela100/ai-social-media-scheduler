@@ -117,6 +117,15 @@ class ScheduledPost(models.Model):
         FAILED = "failed", "Failed"
         NEEDS_RECONNECT = "needs_reconnect", "Needs reconnect"
 
+    class Visibility(models.TextChoices):
+        # Who can see the post once published. Interpreted per platform:
+        #   YouTube  → privacyStatus public / unlisted / private
+        #   LinkedIn → PUBLIC, or CONNECTIONS-only for unlisted/private
+        #   Instagram→ always public (the API can't publish private reels)
+        PUBLIC = "public", "Public"
+        UNLISTED = "unlisted", "Unlisted"
+        PRIVATE = "private", "Private"
+
     # Publishing is attempted this many times before we give up and mark FAILED.
     MAX_RETRIES = 3
 
@@ -136,6 +145,9 @@ class ScheduledPost(models.Model):
 
     final_caption = models.TextField(blank=True, default="")
     scheduled_time_utc = models.DateTimeField()
+    visibility = models.CharField(
+        max_length=10, choices=Visibility.choices, default=Visibility.PUBLIC
+    )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.PENDING
     )

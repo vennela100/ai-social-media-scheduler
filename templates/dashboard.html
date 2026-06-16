@@ -79,7 +79,7 @@
           {% for post in posts %}
             <tr>
               <td>{{ post.video }}</td>
-              <td>{{ post.social_account.get_platform_display }}</td>
+              <td>{{ post.social_account.get_platform_display }}<br><span class="sub" style="color:var(--text-faint);font-size:11.5px;">{{ post.get_visibility_display }}</span></td>
               <td class="mono" title="{{ post.scheduled_time_utc|utc|date:'Y-m-d H:i' }} UTC">{{ post.scheduled_time_utc|date:"M j, Y · H:i" }}</td>
               <td>
                 <span class="pill {{ post.status }}">{{ post.get_status_display }}</span>

@@ -84,6 +84,22 @@
 
             <div class="draft-foot">
               {% if d.connected %}
+                <label class="fld-label">Visibility</label>
+                {% if c.platform == "instagram" %}
+                  <input class="fld" type="text" value="Public (Instagram reels are always public)" disabled>
+                  <input type="hidden" name="visibility" value="public">
+                {% elif c.platform == "linkedin" %}
+                  <select class="fld" name="visibility">
+                    <option value="public">Public — anyone on LinkedIn</option>
+                    <option value="private">Connections only</option>
+                  </select>
+                {% else %}
+                  <select class="fld" name="visibility">
+                    <option value="public">Public — anyone can watch</option>
+                    <option value="unlisted">Unlisted — only people with the link</option>
+                    <option value="private">Private — only you</option>
+                  </select>
+                {% endif %}
                 <label class="fld-label">Publish at <span class="lim">{{ current_tz }}</span></label>
                 <div class="time-row">
                   <input class="fld" type="date" name="sched_date" required>

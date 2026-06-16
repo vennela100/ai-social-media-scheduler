@@ -358,17 +358,24 @@ def schedule_content(request, pk):
             messages.error(request, v)
         return redirect("core:video_detail", pk=content.video.pk)
 
-    ScheduledPost.objects.create(
+    # Visibility the user chose; Instagram ignores it (reels are always public).
+    visibility = request.POST.get("visibility", ScheduledPost.Visibility.PUBLIC)
+    if visibility not in ScheduledPost.Visibility.values:
+        visibility = ScheduledPost.Visibility.PUBLIC
+
+    post = ScheduledPost.objects.create(
         video=content.video,
         social_account=account,
         ai_content=content,
         final_caption=_final_caption(content),
         scheduled_time_utc=when,
+        visibility=visibility,
         status=ScheduledPost.Status.PENDING,
     )
     messages.success(
         request,
-        f"Scheduled to {content.get_platform_display()} for {when:%b %d, %Y · %H:%M} UTC.",
+        f"Scheduled to {content.get_platform_display()} ({post.get_visibility_display()}) "
+        f"for {when:%b %d, %Y · %H:%M} UTC.",
     )
     return redirect("core:dashboard")
 
