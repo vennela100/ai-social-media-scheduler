@@ -205,11 +205,16 @@ def generate_ai(request, pk):
     content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
     video = content.video
 
+    # We persist with QuerySet.update() (a pure UPDATE) instead of content.save().
+    # save() falls back to an INSERT if the row vanished mid-request (e.g. the
+    # user deleted the video while it was generating), which then trips the FK.
+    # update() just touches 0 rows in that case — no crash.
+    rows = AIContent.objects.filter(pk=content.pk)
+
     if not ai.is_configured():
-        content.generation_status = AIContent.GenStatus.FAILED
-        content.save(update_fields=["generation_status"])
+        rows.update(generation_status=AIContent.GenStatus.FAILED)
         return JsonResponse(
-            {"ok": False, "error": "AI isn't configured (GEMINI_API_KEY)."}, status=503
+            {"ok": False, "error": "AI isn't configured (GEMINI_API_KEY)."}, status=200
         )
 
     try:
@@ -221,27 +226,27 @@ def generate_ai(request, pk):
         )
     except Exception as exc:  # SDK / network / parse — isolate to this platform
         logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
-        content.generation_status = AIContent.GenStatus.FAILED
-        content.save(update_fields=["generation_status"])
+        rows.update(generation_status=AIContent.GenStatus.FAILED)
         return JsonResponse(
-            {"ok": False, "error": "Generation failed. Try regenerating."}, status=502
+            {"ok": False, "error": "Generation failed — tap regenerate to retry."}, status=200
         )
 
-    content.generated_title = result["title"]
-    content.generated_description = result["description"]
-    content.generated_hashtags = result["hashtags"]
-    content.ai_model_used = result["model"]
-    content.generation_status = AIContent.GenStatus.DONE
-    content.save()
+    rows.update(
+        generated_title=result["title"],
+        generated_description=result["description"],
+        generated_hashtags=result["hashtags"],
+        ai_model_used=result["model"],
+        generation_status=AIContent.GenStatus.DONE,
+    )
 
     # Nudge the user to describe the video when they didn't — better output next time.
     notice = "" if video.user_description.strip() else "For better results, describe your video above."
     return JsonResponse(
         {
             "ok": True,
-            "title": content.generated_title,
-            "description": content.generated_description,
-            "hashtags": content.generated_hashtags,
+            "title": result["title"],
+            "description": result["description"],
+            "hashtags": result["hashtags"],
             "notice": notice,
         }
     )
@@ -275,6 +280,27 @@ def _parse_local_datetime(raw):
             continue
         return timezone.make_aware(naive, timezone.get_current_timezone())
     return None
+
+
+def _parse_schedule_time(request):
+    """Build an aware datetime from the date + 12-hour (AM/PM) schedule controls.
+
+    Falls back to a legacy datetime-local field if those aren't present.
+    """
+    date_str = request.POST.get("sched_date", "").strip()
+    hour = request.POST.get("sched_hour", "").strip()
+    minute = request.POST.get("sched_minute", "").strip()
+    ampm = request.POST.get("sched_ampm", "").strip().upper()
+    if not (date_str and hour and minute and ampm):
+        return _parse_local_datetime(request.POST.get("scheduled_time", "").strip())
+    try:
+        h = int(hour) % 12            # 12 -> 0, 1..11 stay
+        if ampm == "PM":
+            h += 12                   # 12 PM -> 12, 1 PM -> 13, ...
+        naive = dt.datetime.strptime(f"{date_str} {h:02d}:{int(minute):02d}", "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return None
+    return timezone.make_aware(naive, timezone.get_current_timezone())
 
 
 def _final_caption(content):
@@ -314,7 +340,7 @@ def schedule_content(request, pk):
         )
         return redirect("core:video_detail", pk=content.video.pk)
 
-    when = _parse_local_datetime(request.POST.get("scheduled_time", "").strip())
+    when = _parse_schedule_time(request)
     if when is None:
         messages.error(request, "Pick a valid date and time.")
         return redirect("core:video_detail", pk=content.video.pk)

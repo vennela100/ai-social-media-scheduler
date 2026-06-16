@@ -85,13 +85,29 @@
             <div class="draft-foot">
               {% if d.connected %}
                 <label class="fld-label">Publish at <span class="lim">{{ current_tz }}</span></label>
-                <div style="display:flex;gap:10px;flex-wrap:wrap;">
-                  <input class="fld" style="flex:1;min-width:200px;" type="datetime-local" name="scheduled_time" required>
-                  <button class="btn btn-primary" type="submit">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line><path d="M12 14v3l2 1"></path></svg>
-                    Schedule
-                  </button>
+                <div class="time-row">
+                  <input class="fld" type="date" name="sched_date" required>
+                  <select class="fld" name="sched_hour" required aria-label="Hour">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+                    <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+                    <option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                  </select>
+                  <span class="time-colon">:</span>
+                  <select class="fld" name="sched_minute" required aria-label="Minute">
+                    <option value="00">00</option><option value="05">05</option><option value="10">10</option>
+                    <option value="15">15</option><option value="20">20</option><option value="25">25</option>
+                    <option value="30">30</option><option value="35">35</option><option value="40">40</option>
+                    <option value="45">45</option><option value="50">50</option><option value="55">55</option>
+                  </select>
+                  <select class="fld" name="sched_ampm" required aria-label="AM or PM">
+                    <option value="AM">AM</option><option value="PM">PM</option>
+                  </select>
                 </div>
+                <button class="btn btn-primary" type="submit" style="margin-top:10px;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line><path d="M12 14v3l2 1"></path></svg>
+                  Schedule
+                </button>
               {% else %}
                 <div class="msg error" style="margin:0;">
                   <span>Connect {{ c.get_platform_display }} to schedule this.
@@ -142,10 +158,13 @@
       function generate(card) {
         setState(card, "pending");
         fetch(card.dataset.url, { method: "POST", headers: { "X-CSRFToken": csrftoken } })
-          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-          .then(function (res) {
-            if (!res.ok || !res.j.ok) throw new Error(res.j.error || "Generation failed.");
-            fill(card, res.j);
+          .then(function (r) { return r.text(); })           // read raw, never assume JSON
+          .then(function (text) {
+            var data;
+            try { data = JSON.parse(text); }
+            catch (e) { throw new Error("Server error — tap regenerate to retry."); }
+            if (!data.ok) throw new Error(data.error || "Generation failed.");
+            fill(card, data);
             setState(card, "done");
           })
           .catch(function (e) { setState(card, "failed", e.message); });

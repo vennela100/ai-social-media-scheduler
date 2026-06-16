@@ -201,6 +201,10 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .spinner { width: 15px; height: 15px; border: 2px solid var(--border-strong); border-top-color: var(--accent-bright);
   border-radius: 50%; animation: spin 0.7s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.time-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.time-row input[type="date"] { flex: 1; min-width: 150px; }
+.time-row select { width: auto; padding: 11px 10px; }
+.time-row .time-colon { color: var(--text-faint); font-weight: 700; }
 
 /* ---------- Tables ---------- */
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
