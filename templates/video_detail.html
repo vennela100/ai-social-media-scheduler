@@ -7,7 +7,7 @@
       <div class="eyebrow"><a href="{% url 'core:dashboard' %}" style="color:var(--text-faint);">← Dashboard</a></div>
       <h1>{{ video }}</h1>
       <p>Uploaded {{ video.uploaded_at|date:"M j, Y · H:i" }} ·
-        <a href="{{ video.file_url }}" target="_blank" rel="noopener" style="color:var(--accent-bright);">Open source ↗</a></p>
+        {% if video.source_deleted %}<span style="color:var(--text-faint);" title="Source file deleted after publishing to save storage">📦 source archived</span>{% else %}<a href="{{ video.file_url }}" target="_blank" rel="noopener" style="color:var(--accent-bright);">Open source ↗</a>{% endif %}</p>
     </div>
     <form method="post" action="{% url 'core:video_delete' video.pk %}"
           onsubmit="return confirm('Delete this video? Its AI drafts and any scheduled posts will be removed too. This cannot be undone.');">

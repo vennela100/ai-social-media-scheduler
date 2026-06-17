@@ -281,7 +281,11 @@ def video_delete(request, pk):
     if request.method != "POST":
         return redirect("core:video_detail", pk=video.pk)
     try:
+        # If the source was archived, this id is already gone (harmless no-op);
+        # the live asset is the preserved thumbnail, deleted next.
         delete_media(video.cloudinary_public_id, media_type=video.media_type)
+        if video.thumbnail_public_id:
+            delete_media(video.thumbnail_public_id, media_type="image")
     except Exception as exc:  # Cloudinary hiccup shouldn't block removing the row
         logger.warning("Cloudinary delete failed for video %s: %s", video.pk, exc)
     video.delete()
@@ -347,6 +351,14 @@ def schedule_content(request, pk):
     """Save the user's edits to a draft, then schedule it as a pending post."""
     content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
     if request.method != "POST":
+        return redirect("core:video_detail", pk=content.video.pk)
+
+    # The source file is archived after publishing — there's nothing left to post.
+    if content.video.source_deleted:
+        messages.error(
+            request,
+            "This video's source was archived after publishing. Re-upload it to post again.",
+        )
         return redirect("core:video_detail", pk=content.video.pk)
 
     # An image can only be scheduled to a platform that accepts images.

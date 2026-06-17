@@ -25,6 +25,10 @@ logger = logging.getLogger("scheduler")
 # Folder inside your Cloudinary account where uploads land. Keeps the media
 # library tidy and makes it easy to find/clean app uploads.
 CLOUDINARY_FOLDER = "scheduler_videos"
+# Tiny preserved thumbnails live here after a source is archived.
+CLOUDINARY_THUMB_FOLDER = "scheduler_thumbnails"
+# Max width (px) for a preserved thumbnail — keeps it a few KB vs the source MBs.
+THUMBNAIL_MAX_WIDTH = 480
 
 # Usage is an external API call, so cache it briefly: the dashboard can render
 # many times a minute, but Cloudinary's numbers barely move minute-to-minute.
@@ -96,6 +100,30 @@ def delete_media(public_id: str, *, media_type: str = "video") -> None:
     cloudinary.uploader.destroy(public_id, resource_type=resource_type, invalidate=True)
     logger.info("Deleted %s from Cloudinary: %s", resource_type, public_id)
     cache.delete(_USAGE_CACHE_KEY)  # numbers just changed — force a fresh lookup
+
+
+def preserve_thumbnail(image_url: str) -> dict | None:
+    """Re-upload a small, standalone copy of `image_url` as a permanent thumbnail.
+
+    Before we delete a video/image source, we copy its preview frame into a tiny
+    independent image asset (a few KB). That survives the source deletion, so the
+    dashboard keeps showing a thumbnail. Cloudinary fetches the remote URL itself.
+    Returns {"url", "public_id"} or None on any failure (caller keeps the source).
+    """
+    if not image_url:
+        return None
+    try:
+        _ensure_configured()
+        result = cloudinary.uploader.upload(
+            image_url,
+            folder=CLOUDINARY_THUMB_FOLDER,
+            resource_type="image",
+            transformation=[{"width": THUMBNAIL_MAX_WIDTH, "crop": "limit", "quality": "auto"}],
+        )
+    except Exception as exc:
+        logger.warning("Thumbnail preserve failed for %s: %s", image_url, exc)
+        return None
+    return {"url": result["secure_url"], "public_id": result["public_id"]}
 
 
 def human_bytes(n: float) -> str:

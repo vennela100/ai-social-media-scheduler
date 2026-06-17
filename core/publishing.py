@@ -12,13 +12,14 @@ Kept separate from the command so it can be unit-tested directly.
 
 import datetime as dt
 import logging
+import os
 import re
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
-from . import instagram, linkedin, youtube
-from .models import ScheduledPost
+from . import instagram, linkedin, storage, youtube
+from .models import ScheduledPost, Video
 from .notifications import notify_failure
 
 logger = logging.getLogger("scheduler")
@@ -26,6 +27,11 @@ logger = logging.getLogger("scheduler")
 # A post claimed (PROCESSING) but not finished within this window is assumed
 # orphaned by a crashed run and is reset to PENDING.
 STUCK_PROCESSING_MINUTES = 30
+
+# Days to keep a fully-published video's source before archiving it (deleting the
+# heavy Cloudinary file, keeping only a thumbnail). The window gives the user time
+# to schedule the same video to more platforms before its source disappears.
+SOURCE_RETENTION_DAYS = int(os.environ.get("SOURCE_RETENTION_DAYS", "7"))
 
 
 # --- Per-platform publishers: each takes a post, returns the platform post id ---
@@ -169,6 +175,57 @@ def process_post(post: ScheduledPost) -> str:
         return post.status
 
 
+def _archive_source(video: Video) -> bool:
+    """Delete a fully-published video's heavy Cloudinary source, keeping a thumb.
+
+    Preserves a small standalone thumbnail FIRST so the dashboard still shows a
+    preview; only deletes the source if that succeeds (so we never strand a video
+    with no image at all). Returns True if the source was archived.
+    """
+    if not video.cloudinary_public_id or video.source_deleted:
+        return False
+
+    thumb = storage.preserve_thumbnail(video.thumbnail_url)
+    if thumb is None:
+        logger.warning("Skipping archive of video %s: thumbnail preserve failed", video.pk)
+        return False
+
+    try:
+        storage.delete_media(video.cloudinary_public_id, media_type=video.media_type)
+    except Exception as exc:
+        logger.warning("Archive of video %s failed deleting source: %s", video.pk, exc)
+        return False
+
+    video.thumbnail_url = thumb["url"]
+    video.thumbnail_public_id = thumb["public_id"]
+    video.source_deleted = True
+    video.save(update_fields=["thumbnail_url", "thumbnail_public_id", "source_deleted"])
+    logger.info("Archived source for video %s (kept thumbnail %s)", video.pk, thumb["public_id"])
+    return True
+
+
+def cleanup_published_sources(now=None, retention_days: int = SOURCE_RETENTION_DAYS) -> int:
+    """Archive sources of videos whose posts are all published and old enough.
+
+    Returns how many sources were archived. Safe to run every tick: it only
+    touches videos that still have a source, are fully published, and were
+    uploaded more than `retention_days` ago.
+    """
+    now = now or timezone.now()
+    cutoff = now - dt.timedelta(days=retention_days)
+    candidates = Video.objects.filter(
+        source_deleted=False, uploaded_at__lt=cutoff
+    ).exclude(cloudinary_public_id="")
+
+    archived = 0
+    for video in candidates:
+        if video.is_fully_published() and _archive_source(video):
+            archived += 1
+    if archived:
+        logger.info("Archived %d published video source(s)", archived)
+    return archived
+
+
 def run(now=None) -> dict:
     """Process all due posts. Returns a summary dict of outcomes."""
     now = now or timezone.now()
@@ -203,6 +260,9 @@ def run(now=None) -> dict:
             summary["needs_reconnect"] += 1
         else:  # back to PENDING for a future retry
             summary["retrying"] += 1
+
+    # Reclaim storage: archive sources of videos that are fully published + aged out.
+    summary["archived"] = cleanup_published_sources(now)
 
     logger.info("publish_due_posts run complete: %s", summary)
     return summary

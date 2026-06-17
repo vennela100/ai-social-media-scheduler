@@ -71,7 +71,7 @@
           </div>
           <div class="vmeta">
             <strong>{{ video }}</strong>
-            <span class="sub">{{ video.uploaded_at|date:"M j, Y" }} · {{ video.ai_contents.count }} AI draft{{ video.ai_contents.count|pluralize }}</span>
+            <span class="sub">{{ video.uploaded_at|date:"M j, Y" }} · {{ video.ai_contents.count }} AI draft{{ video.ai_contents.count|pluralize }}{% if video.source_deleted %} · <span title="Source file archived after publishing to save storage">📦 archived</span>{% endif %}</span>
           </div>
         </a>
       {% endfor %}

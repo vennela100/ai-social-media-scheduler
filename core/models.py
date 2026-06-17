@@ -78,6 +78,11 @@ class Video(models.Model):
     # Cloudinary's public_id for this asset — kept so we can delete the remote
     # file when the user deletes the video (the URL alone is awkward to reverse).
     cloudinary_public_id = models.CharField(max_length=300, blank=True, default="")
+    # Once every scheduled post for this video has published, the heavy source
+    # file is redundant (the platforms host their own copies), so the scheduler
+    # archives it: deletes the Cloudinary source, keeps only a small thumbnail.
+    source_deleted = models.BooleanField(default=False)
+    thumbnail_public_id = models.CharField(max_length=300, blank=True, default="")
     # The user's own words about the video. These are the PRIMARY context the AI
     # writes from (filename is only a fallback), and they're kept so a draft can
     # be regenerated later without re-typing.
@@ -90,6 +95,18 @@ class Video(models.Model):
 
     def __str__(self) -> str:
         return self.original_filename or f"Video #{self.pk}"
+
+    def is_fully_published(self) -> bool:
+        """True if this video has scheduled posts and every one has published.
+
+        Used to decide when the source file is safe to archive: if anything is
+        still pending/processing/failed/awaiting-reconnect, the source may yet be
+        needed for a (re)publish, so we keep it.
+        """
+        posts = self.scheduled_posts.all()
+        return bool(posts) and all(
+            p.status == ScheduledPost.Status.PUBLISHED for p in posts
+        )
 
 
 class AIContent(models.Model):
