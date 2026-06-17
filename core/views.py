@@ -562,13 +562,12 @@ def instagram_callback(request):
     expected = request.session.pop("instagram_oauth_state", None)
     returned = request.GET.get("state")
     if not expected or returned != expected:
-        # Log which failure mode so a recurring mismatch is diagnosable: a MISSING
-        # expected state = the session didn't carry it over (cookie/duplicate-tab
-        # issue); a DIFFERENT one = a stale or replayed callback.
-        logger.warning(
-            "Instagram state check failed: expected=%r returned=%r (session_key=%s)",
-            expected, returned, request.session.session_key,
-        )
+        # Log which failure mode so a recurring mismatch is diagnosable: "missing"
+        # = the session didn't carry the state over (cookie/duplicate-tab issue);
+        # "mismatch" = a stale or replayed callback. We deliberately log neither the
+        # state values nor the session key — those are sensitive (session hijack).
+        mode = "missing" if not expected else "mismatch"
+        logger.warning("Instagram state check failed: mode=%s", mode)
         messages.error(request, "Instagram connection failed: state mismatch. Try again.")
         return redirect("core:connections")
 
