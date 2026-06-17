@@ -52,12 +52,25 @@ class SocialAccount(models.Model):
 
 
 class Video(models.Model):
-    """An uploaded source video, stored on Cloudinary (public URL)."""
+    """An uploaded source asset (video or image), stored on Cloudinary (public URL).
+
+    The model keeps the name `Video` for historical reasons — most uploads are
+    videos — but `media_type` lets it also hold a still image (e.g. a certificate
+    to share on LinkedIn). The type drives the Cloudinary resource_type and the
+    LinkedIn publish recipe.
+    """
+
+    class MediaType(models.TextChoices):
+        VIDEO = "video", "Video"
+        IMAGE = "image", "Image"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="videos",
+    )
+    media_type = models.CharField(
+        max_length=10, choices=MediaType.choices, default=MediaType.VIDEO
     )
     file_url = models.URLField(max_length=500)
     thumbnail_url = models.URLField(max_length=500, blank=True, default="")

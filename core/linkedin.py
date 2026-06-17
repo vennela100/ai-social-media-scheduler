@@ -1,9 +1,10 @@
 """
-LinkedIn OAuth + video publishing — Phase 6.
+LinkedIn OAuth + video/image publishing — Phase 6.
 
-Publishing a member video is a 3-step flow on the classic v2 surface (the one a
-self-serve "Share on LinkedIn" app can actually get approved for — the newer
-/rest/posts Videos API needs Community Management access):
+Publishing a member video OR image is a 3-step flow on the classic v2 surface
+(the one a self-serve "Share on LinkedIn" app can actually get approved for — the
+newer /rest/posts API needs Community Management access). Video and image differ
+only in the registerUpload recipe and the share's shareMediaCategory:
 
   1. POST /v2/assets?action=registerUpload   -> returns an uploadUrl + asset URN
   2. Upload the raw video bytes to that uploadUrl (LinkedIn stores them; unlike
@@ -139,11 +140,12 @@ def _headers(token: str) -> dict:
     }
 
 
-def _register_upload(account: SocialAccount) -> tuple[str, str]:
-    """Register a video upload. Returns (upload_url, asset_urn)."""
+def _register_upload(account: SocialAccount, *, media_type: str = "video") -> tuple[str, str]:
+    """Register a video/image upload. Returns (upload_url, asset_urn)."""
+    recipe = "feedshare-image" if media_type == "image" else "feedshare-video"
     body = {
         "registerUploadRequest": {
-            "recipes": ["urn:li:digitalmediaRecipe:feedshare-video"],
+            "recipes": [f"urn:li:digitalmediaRecipe:{recipe}"],
             "owner": _author_urn(account),
             "serviceRelationships": [
                 {"relationshipType": "OWNER", "identifier": "urn:li:userGeneratedContent"}
@@ -164,9 +166,9 @@ def _register_upload(account: SocialAccount) -> tuple[str, str]:
     return upload_url, value["asset"]
 
 
-def _upload_bytes(upload_url: str, token: str, video_url: str) -> None:
-    """Stream the video down from Cloudinary and up to LinkedIn's upload URL."""
-    src = requests.get(video_url, timeout=120)
+def _upload_bytes(upload_url: str, token: str, media_url: str) -> None:
+    """Stream the asset down from Cloudinary and up to LinkedIn's upload URL."""
+    src = requests.get(media_url, timeout=120)
     src.raise_for_status()
     up = requests.post(
         upload_url,
@@ -180,15 +182,16 @@ def _upload_bytes(upload_url: str, token: str, video_url: str) -> None:
     up.raise_for_status()
 
 
-def _create_share(account: SocialAccount, asset_urn: str, commentary: str, visibility: str) -> str:
-    """Create the UGC video post. Returns the post URN."""
+def _create_share(account: SocialAccount, asset_urn: str, commentary: str, visibility: str,
+                  share_media_category: str = "VIDEO") -> str:
+    """Create the UGC post (VIDEO or IMAGE). Returns the post URN."""
     body = {
         "author": _author_urn(account),
         "lifecycleState": "PUBLISHED",
         "specificContent": {
             "com.linkedin.ugc.ShareContent": {
                 "shareCommentary": {"text": commentary[:MAX_COMMENTARY]},
-                "shareMediaCategory": "VIDEO",
+                "shareMediaCategory": share_media_category,
                 "media": [{"status": "READY", "media": asset_urn}],
             }
         },
@@ -204,17 +207,20 @@ def _create_share(account: SocialAccount, asset_urn: str, commentary: str, visib
     return r.headers.get("X-RestLi-Id") or r.json().get("id", "")
 
 
-def publish(account: SocialAccount, *, video_url: str, caption: str, visibility: str = "public") -> str:
-    """Publish a video to the member's feed. Returns the LinkedIn post URN.
+def publish(account: SocialAccount, *, media_url: str, caption: str,
+            visibility: str = "public", media_type: str = "video") -> str:
+    """Publish a video or image to the member's feed. Returns the LinkedIn post URN.
 
     `visibility` is the post's chosen visibility ("public"/"unlisted"/"private");
     LinkedIn only offers PUBLIC or CONNECTIONS, so anything non-public maps to
-    CONNECTIONS-only.
+    CONNECTIONS-only. `media_type` ("video"/"image") selects the upload recipe
+    and the share's media category.
     """
     li_visibility = "PUBLIC" if visibility == "public" else "CONNECTIONS"
-    upload_url, asset_urn = _register_upload(account)
-    logger.info("LinkedIn upload registered: %s", asset_urn)
-    _upload_bytes(upload_url, account.access_token, video_url)
-    post_urn = _create_share(account, asset_urn, caption, li_visibility)
-    logger.info("Published to LinkedIn (%s): %s", li_visibility, post_urn)
+    category = "IMAGE" if media_type == "image" else "VIDEO"
+    upload_url, asset_urn = _register_upload(account, media_type=media_type)
+    logger.info("LinkedIn %s upload registered: %s", category, asset_urn)
+    _upload_bytes(upload_url, account.access_token, media_url)
+    post_urn = _create_share(account, asset_urn, caption, li_visibility, category)
+    logger.info("Published to LinkedIn (%s, %s): %s", category, li_visibility, post_urn)
     return post_urn

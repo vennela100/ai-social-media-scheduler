@@ -41,32 +41,37 @@ def _ensure_configured() -> None:
     cloudinary.config()
 
 
-def upload_video(file, *, folder: str = CLOUDINARY_FOLDER) -> dict:
+def upload_media(file, *, media_type: str = "video", folder: str = CLOUDINARY_FOLDER) -> dict:
     """
-    Upload a video file object to Cloudinary.
+    Upload a video or image file object to Cloudinary.
 
-    Returns a dict with the public URL, a generated thumbnail URL, the
-    Cloudinary public_id, and the original filename — exactly the fields the
-    Video model stores.
+    `media_type` is "video" or "image"; it selects Cloudinary's resource_type
+    (they have different transformation pipelines and delivery URLs). Returns a
+    dict with the public URL, a thumbnail URL, the Cloudinary public_id, and the
+    original filename — exactly the fields the Video model stores.
     """
     _ensure_configured()
 
+    resource_type = "image" if media_type == "image" else "video"
     result = cloudinary.uploader.upload(
         file,
-        resource_type="video",
+        resource_type=resource_type,
         folder=folder,
         use_filename=True,
         unique_filename=True,
     )
     public_id = result["public_id"]
 
-    # Derive a JPG thumbnail URL from the first frame of the video. Cloudinary
-    # generates it on the fly — no second upload needed.
-    thumbnail_url, _ = cloudinary.utils.cloudinary_url(
-        public_id, resource_type="video", format="jpg"
-    )
+    if resource_type == "video":
+        # Derive a JPG thumbnail from the first frame — generated on the fly.
+        thumbnail_url, _ = cloudinary.utils.cloudinary_url(
+            public_id, resource_type="video", format="jpg"
+        )
+    else:
+        # A still image is its own thumbnail.
+        thumbnail_url = result["secure_url"]
 
-    logger.info("Uploaded video to Cloudinary: %s", public_id)
+    logger.info("Uploaded %s to Cloudinary: %s", resource_type, public_id)
     return {
         "file_url": result["secure_url"],
         "thumbnail_url": thumbnail_url,
@@ -75,10 +80,11 @@ def upload_video(file, *, folder: str = CLOUDINARY_FOLDER) -> dict:
     }
 
 
-def delete_video(public_id: str) -> None:
-    """Delete a video asset from Cloudinary. No-op if we have no public_id."""
+def delete_media(public_id: str, *, media_type: str = "video") -> None:
+    """Delete an asset from Cloudinary. No-op if we have no public_id."""
     if not public_id:
         return
     _ensure_configured()
-    cloudinary.uploader.destroy(public_id, resource_type="video", invalidate=True)
-    logger.info("Deleted video from Cloudinary: %s", public_id)
+    resource_type = "image" if media_type == "image" else "video"
+    cloudinary.uploader.destroy(public_id, resource_type=resource_type, invalidate=True)
+    logger.info("Deleted %s from Cloudinary: %s", resource_type, public_id)

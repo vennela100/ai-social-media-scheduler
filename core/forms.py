@@ -7,17 +7,30 @@ from .models import AIContent, Platform
 # --- Upload limits (decision point — tune to your needs) ---
 # Cloudinary's free tier caps a single video around 100 MB, so staying under
 # that avoids hard API rejections. Extensions are an allowlist: we check the
-# filename suffix AND let Cloudinary reject anything that isn't really a video.
+# filename suffix AND let Cloudinary reject anything that isn't really media.
 MAX_UPLOAD_MB = 100
-ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
+
+
+def media_type_for(filename: str) -> str | None:
+    """Map a filename to "video" / "image" / None (unsupported) by extension."""
+    name = (filename or "").lower()
+    if any(name.endswith(ext) for ext in VIDEO_EXTENSIONS):
+        return "video"
+    if any(name.endswith(ext) for ext in IMAGE_EXTENSIONS):
+        return "image"
+    return None
 
 
 class VideoUploadForm(forms.Form):
-    """A video file to push to Cloudinary, plus which platforms to draft for."""
+    """A video or image to push to Cloudinary, plus which platforms to draft for."""
 
     video = forms.FileField(
-        label="Video file",
-        help_text=f"Up to {MAX_UPLOAD_MB} MB. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        label="Video or image file",
+        help_text=f"Up to {MAX_UPLOAD_MB} MB. Video: {', '.join(sorted(VIDEO_EXTENSIONS))}. "
+                  f"Image: {', '.join(sorted(IMAGE_EXTENSIONS))} (images can be posted to LinkedIn).",
     )
     title = forms.CharField(
         label="Video title (optional)",
@@ -48,10 +61,9 @@ class VideoUploadForm(forms.Form):
                 f"File is {f.size / 1024 / 1024:.1f} MB; the limit is {MAX_UPLOAD_MB} MB."
             )
 
-        # Extension allowlist — a cheap first filter. Cloudinary's
-        # resource_type='video' is the real backstop against non-video files.
-        name = (f.name or "").lower()
-        if not any(name.endswith(ext) for ext in ALLOWED_EXTENSIONS):
+        # Extension allowlist — a cheap first filter. Cloudinary's resource_type
+        # is the real backstop against files that lie about their extension.
+        if media_type_for(f.name) is None:
             raise forms.ValidationError(
                 f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}."
             )

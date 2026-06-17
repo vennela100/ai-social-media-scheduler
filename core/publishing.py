@@ -69,8 +69,8 @@ def _publish_instagram(post: ScheduledPost) -> str:
 
 def _publish_linkedin(post: ScheduledPost) -> str:
     return linkedin.publish(
-        post.social_account, video_url=post.video.file_url, caption=_caption_for(post),
-        visibility=post.visibility,
+        post.social_account, media_url=post.video.file_url, caption=_caption_for(post),
+        visibility=post.visibility, media_type=post.video.media_type,
     )
 
 

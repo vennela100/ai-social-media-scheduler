@@ -26,9 +26,10 @@ from .forms import (
     AIContentForm,
     GenerateMetadataForm,
     VideoUploadForm,
+    media_type_for,
 )
 from .models import AIContent, ScheduledPost, SocialAccount, Video
-from .storage import delete_video, is_configured, upload_video
+from .storage import delete_media, is_configured, upload_media
 
 logger = logging.getLogger("scheduler")
 
@@ -111,8 +112,9 @@ def upload(request):
     if request.method == "POST":
         form = VideoUploadForm(request.POST, request.FILES)
         if form.is_valid():
+            media_type = media_type_for(form.cleaned_data["video"].name) or "video"
             try:
-                result = upload_video(form.cleaned_data["video"])
+                result = upload_media(form.cleaned_data["video"], media_type=media_type)
             except ImproperlyConfigured as exc:
                 # Cloudinary key not set yet — tell the user plainly, don't 500.
                 messages.error(request, f"Upload service not ready: {exc}")
@@ -124,6 +126,7 @@ def upload(request):
 
             video = Video.objects.create(
                 user=request.user,
+                media_type=media_type,
                 file_url=result["file_url"],
                 thumbnail_url=result["thumbnail_url"],
                 original_filename=result["original_filename"],
@@ -260,7 +263,7 @@ def video_delete(request, pk):
     if request.method != "POST":
         return redirect("core:video_detail", pk=video.pk)
     try:
-        delete_video(video.cloudinary_public_id)
+        delete_media(video.cloudinary_public_id, media_type=video.media_type)
     except Exception as exc:  # Cloudinary hiccup shouldn't block removing the row
         logger.warning("Cloudinary delete failed for video %s: %s", video.pk, exc)
     video.delete()
@@ -315,11 +318,26 @@ def _final_caption(content):
     return "\n\n".join(parts)
 
 
+# Which platforms can actually publish a still image today. YouTube is video-only;
+# our Instagram publisher only does video Reels — so images go to LinkedIn alone.
+# (Decision point: widen this once an Instagram image-post path exists.)
+IMAGE_PLATFORMS = {"linkedin"}
+
+
 @login_required
 def schedule_content(request, pk):
     """Save the user's edits to a draft, then schedule it as a pending post."""
     content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
     if request.method != "POST":
+        return redirect("core:video_detail", pk=content.video.pk)
+
+    # An image can only be scheduled to a platform that accepts images.
+    if content.video.media_type == "image" and content.platform not in IMAGE_PLATFORMS:
+        messages.error(
+            request,
+            f"{content.get_platform_display()} can't post a still image — images can "
+            f"only go to {', '.join(p.title() for p in IMAGE_PLATFORMS)} right now.",
+        )
         return redirect("core:video_detail", pk=content.video.pk)
 
     # Persist edits FIRST so they survive any validation bounce-back (the review
