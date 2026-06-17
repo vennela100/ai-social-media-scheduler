@@ -39,34 +39,67 @@ PLATFORM_LIMITS = {
     "linkedin": {"title": 150, "description": 3000, "max_hashtags": 5},
 }
 
-# Per-platform instruction blocks. Each asks for the platform's own JSON shape;
-# _normalize() maps those keys back onto our (title, description, hashtags) trio.
+# Reach-optimised, media-type-aware prompts (always on — no toggle). Each embeds
+# [[MEDIA_TYPE]] / [[DESC]] / [[CATEGORY]] placeholders that _build_prompt fills,
+# and asks for the platform's own JSON shape; _normalize() maps those keys back
+# onto our (title, description, hashtags) trio.
 PLATFORM_PROMPTS = {
     "youtube": (
-        "Generate for YouTube:\n"
-        "- A click-worthy title (max 100 chars)\n"
-        "- A detailed SEO-optimized description with keyword-rich paragraphs "
-        "(max 5000 chars). Include a 'Timestamps:' section with '00:00 Intro' "
-        "as a placeholder.\n"
-        "- 10-15 relevant tags as a comma-separated list\n"
-        'Return as JSON: {"title": "", "description": "", "tags": ""}'
+        "You are a YouTube SEO expert who writes titles and descriptions that rank and get clicked.\n\n"
+        'Media type: "[[MEDIA_TYPE]]"\n'
+        'Video topic: "[[DESC]]"\n'
+        'Category: "[[CATEGORY]]"\n\n'
+        "Title: use formula [Outcome or Curiosity Hook] + [Timeframe or Consequence], max 100 chars, no clickbait.\n\n"
+        "Description: first 2 lines must contain the primary keyword naturally. Then 2-3 keyword-rich paragraphs. "
+        "Then a Timestamps section with placeholder entries. Then a Connect section placeholder. Max 5000 chars.\n\n"
+        "Tags: first tag is the exact primary keyword phrase. Next 5-7 are specific variations. Last 3-5 are broad "
+        "category terms. Return as comma-separated string, 10-15 tags total.\n\n"
+        "Return as JSON only:\n"
+        '{"title": "", "description": "", "tags": ""}'
     ),
     "instagram": (
-        "Generate for Instagram:\n"
-        "- A punchy opening line (max 125 chars)\n"
-        "- Full caption with a storytelling tone and line breaks for readability\n"
-        "- 20-30 hashtags grouped broad, niche, micro — placed at the end\n"
-        'Return as JSON: {"caption": "", "hashtags": ""}'
+        "You are an Instagram growth strategist who writes captions that stop scrolls and drive saves.\n\n"
+        'Media type: "[[MEDIA_TYPE]]"\n'
+        'Content topic: "[[DESC]]"\n'
+        'Category: "[[CATEGORY]]"\n\n'
+        "If media_type is image: write the caption to complement a visual — first line references what the viewer "
+        "is seeing and why it matters.\n"
+        "If media_type is video: write for a Reel — first line stops the scroll and teases what happens.\n\n"
+        "Caption: first line scroll-stopping hook under 125 chars no hashtags. Blank line. Body in short punchy lines "
+        "max 2 sentences per paragraph. End with a specific easy-to-answer question. Then 3 blank lines. Then hashtags: "
+        "5 broad (1M+ posts), 10 niche (100K-1M posts), 10 micro (under 100K posts). Never put hashtags in caption body.\n\n"
+        "Return as JSON only:\n"
+        '{"caption": "", "hashtags": ""}'
     ),
     "linkedin": (
-        "Generate a professional LinkedIn post:\n"
-        "- Strong hook line first\n"
-        "- 3-4 short insight paragraphs in a first-person tone\n"
-        "- Closing question or call to action to drive comments\n"
-        "- Max 5 relevant hashtags only, no link spam\n"
-        'Return as JSON: {"post": "", "hashtags": ""}'
+        "You are a LinkedIn content strategist who writes posts that get pushed by the algorithm.\n\n"
+        'Media type: "[[MEDIA_TYPE]]"\n'
+        'Content topic: "[[DESC]]"\n'
+        'Category: "[[CATEGORY]]"\n\n'
+        "If media_type is image: opening line references what the image shows. Write the post as a story or insight "
+        "the image illustrates.\n"
+        "If media_type is video: write in first-person narrative about the insight or story from the video.\n\n"
+        "Post: bold opening statement that creates curiosity. Blank line. 3-4 paragraphs max 2 lines each. First-person "
+        "tone throughout. No URLs or links anywhere. End with one simple open question. Blank line. Max 5 hashtags on "
+        "last line only.\n\n"
+        "Return as JSON only:\n"
+        '{"post": "", "hashtags": "", "first_comment_reminder": "Paste your video or image link in the first comment '
+        '— never in the post body, it kills reach by 50%"}'
     ),
 }
+
+# Rule appended to every prompt for image posts so the copy never implies motion.
+IMAGE_RULE = (
+    "Since this is an image not a video, do not use the words watching or in this "
+    "video anywhere. Write as if the viewer is looking at a photo or graphic."
+)
+
+# Static reminder surfaced on the LinkedIn schedule card (links in the post body
+# suppress reach; put them in the first comment instead).
+LINKEDIN_FIRST_COMMENT_REMINDER = (
+    "Paste your video or image link in the first comment — never in the post body, "
+    "it kills reach by 50%."
+)
 
 
 def is_configured() -> bool:
@@ -84,23 +117,22 @@ def _client():
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
-def _build_prompt(platform: str, title: str, description: str, filename: str, analyzed: bool = False) -> str:
+def _build_prompt(platform: str, title: str, description: str, filename: str,
+                  media_type: str = "video", category: str = "", analyzed: bool = False) -> str:
     # The user's description is the source of truth; title/filename fill gaps.
-    desc = description.strip() or f"(no description provided — infer the topic from the title/filename: {filename or 'unknown'})"
-    ctx_title = title.strip() or filename or "(untitled)"
-    watch = (
-        "Also watch the attached video and let what actually happens in it inform "
-        "the content.\n"
-        if analyzed
-        else ""
+    desc = description.strip() or f"infer the topic from the title/filename: {(title.strip() or filename) or 'unknown'}"
+    cat = category.strip() or "general"
+    prompt = (
+        PLATFORM_PROMPTS[platform]
+        .replace("[[MEDIA_TYPE]]", media_type)
+        .replace("[[DESC]]", desc)
+        .replace("[[CATEGORY]]", cat)
     )
-    return (
-        "You are an expert social media copywriter.\n"
-        f'Based on this video description: "{desc}"\n'
-        f"Video title/context: {ctx_title}\n"
-        f"{watch}\n"
-        f"{PLATFORM_PROMPTS[platform]}"
-    )
+    if media_type == "image":
+        prompt += "\n\n" + IMAGE_RULE
+    if analyzed:
+        prompt += "\n\nAlso watch the attached video and let what actually happens in it inform the content."
+    return prompt
 
 
 def _split_tags(raw) -> list[str]:
@@ -184,13 +216,15 @@ def cleanup_analysis(gfile) -> None:
         logger.debug("Could not delete Gemini file %s: %s", getattr(gfile, "name", "?"), exc)
 
 
-def generate_metadata(platform: str, title: str = "", description: str = "", filename: str = "", video_file=None) -> dict:
+def generate_metadata(platform: str, title: str = "", description: str = "", filename: str = "",
+                      media_type: str = "video", category: str = "", video_file=None) -> dict:
     """
-    Generate platform-specific metadata, driven by the user's title + description.
+    Generate platform-specific metadata, driven by the user's description.
 
-    The user's words are the primary context; `filename` is only a fallback when
-    they leave the description blank. If `video_file` (a Gemini handle) is given,
-    the model also watches the footage.
+    `media_type` ("video"/"image") and `category` steer the reach-optimised
+    prompts; for images an extra rule forbids motion words. `filename`/`title`
+    are only fallbacks when the description is blank. If `video_file` (a Gemini
+    handle) is given, the model also watches the footage.
 
     Returns {"title", "description", "hashtags", "model"} already trimmed to the
     platform's limits, where hashtags is one string (comma-separated tags for
@@ -202,7 +236,10 @@ def generate_metadata(platform: str, title: str = "", description: str = "", fil
     from google.genai import types
 
     client = _client()
-    prompt = _build_prompt(platform, title, description, filename, analyzed=bool(video_file))
+    prompt = _build_prompt(
+        platform, title, description, filename,
+        media_type=media_type, category=category, analyzed=bool(video_file),
+    )
     contents = [video_file, prompt] if video_file else prompt
     response = client.models.generate_content(
         model=GEMINI_MODEL,

@@ -88,6 +88,9 @@ class Video(models.Model):
     # be regenerated later without re-typing.
     user_title = models.CharField(max_length=255, blank=True, default="")
     user_description = models.TextField(blank=True, default="")
+    # A short topic/niche (e.g. "fitness", "tech tutorials") that steers the AI's
+    # SEO/keyword choices. Fed into every Gemini prompt as `category`.
+    category = models.CharField(max_length=100, blank=True, default="")
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

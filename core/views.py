@@ -163,6 +163,7 @@ def upload(request):
                 cloudinary_public_id=result.get("public_id", ""),
                 user_title=form.cleaned_data["title"],
                 user_description=form.cleaned_data["description"],
+                category=form.cleaned_data["category"],
             )
 
             platforms = form.cleaned_data["platforms"]
@@ -202,13 +203,15 @@ def video_detail(request, pk):
     connected = set(
         SocialAccount.objects.filter(user=request.user).values_list("platform", flat=True)
     )
-    # Bundle each draft with its platform limits + whether that account is
-    # connected, so the template can render hints and gate the schedule button.
+    # Bundle each draft with its platform limits, whether that account is
+    # connected, and whether the platform accepts this media type (YouTube can't
+    # take images), so the template can render hints + gate the schedule controls.
     drafts = [
         {
             "content": c,
             "limits": ai.PLATFORM_LIMITS.get(c.platform, {}),
             "connected": c.platform in connected,
+            "media_ok": not (video.media_type == "image" and c.platform not in IMAGE_PLATFORMS),
         }
         for c in video.ai_contents.all()
     ]
@@ -222,6 +225,7 @@ def video_detail(request, pk):
             "ai_ready": ai.is_configured(),
             "has_description": bool(video.user_description.strip()),
             "current_tz": timezone.get_current_timezone_name(),
+            "linkedin_first_comment": ai.LINKEDIN_FIRST_COMMENT_REMINDER,
         },
     )
 
@@ -255,6 +259,8 @@ def generate_ai(request, pk):
             title=video.user_title,
             description=video.user_description,
             filename=video.original_filename,
+            media_type=video.media_type,
+            category=video.category,
         )
     except Exception as exc:  # SDK / network / parse — isolate to this platform
         logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)

@@ -7,6 +7,7 @@
       <div class="eyebrow"><a href="{% url 'core:dashboard' %}" style="color:var(--text-faint);">← Dashboard</a></div>
       <h1>{{ video }}</h1>
       <p>Uploaded {{ video.uploaded_at|date:"M j, Y · H:i" }} ·
+        <span class="media-badge {{ video.media_type }}">{{ video.get_media_type_display }}</span> ·
         {% if video.source_deleted %}<span style="color:var(--text-faint);" title="Source file deleted after publishing to save storage">📦 source archived</span>{% else %}<a href="{{ video.file_url }}" target="_blank" rel="noopener" style="color:var(--accent-bright);">Open source ↗</a>{% endif %}</p>
     </div>
     <form method="post" action="{% url 'core:video_delete' video.pk %}"
@@ -51,6 +52,12 @@
     <div class="grid reveal" id="drafts" style="grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px;align-items:start;">
       {% for d in drafts %}
         {% with c=d.content %}
+        {% if not d.media_ok %}
+        <div class="card draft draft-disabled" data-platform="{{ c.platform }}">
+          <div class="draft-head"><span class="pill {{ c.platform }}">{{ c.get_platform_display }}</span></div>
+          <div class="msg error" style="margin:12px 0 0;"><span>{{ c.get_platform_display }} does not support image posts. Remove this draft or upload a video instead.</span></div>
+        </div>
+        {% else %}
         <div class="card draft" data-aicontent="{{ c.pk }}" data-platform="{{ c.platform }}"
              data-status="{{ c.generation_status }}" data-url="{% url 'core:generate_ai' c.pk %}">
           <div class="draft-head">
@@ -80,6 +87,10 @@
               <textarea class="fld" name="description" rows="8">{{ c.generated_description }}</textarea>
               <label class="fld-label">Hashtags <span class="lim">≤ {{ d.limits.max_hashtags }}</span></label>
               <textarea class="fld" name="hashtags" rows="2">{{ c.generated_hashtags }}</textarea>
+            {% endif %}
+
+            {% if c.platform == "linkedin" %}
+              <div class="li-reminder">💡 {{ linkedin_first_comment }}</div>
             {% endif %}
 
             <div class="draft-foot">
@@ -133,6 +144,7 @@
             </div>
           </form>
         </div>
+        {% endif %}
         {% endwith %}
       {% endfor %}
     </div>

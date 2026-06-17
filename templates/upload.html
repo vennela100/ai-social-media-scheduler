@@ -27,6 +27,17 @@
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
       {{ form.as_p }}
+
+      <div id="media-preview" class="media-preview" hidden>
+        <span class="media-preview-label"></span>
+        <div class="media-preview-box"></div>
+      </div>
+
+      <div id="yt-image-warning" class="msg error" hidden style="margin:14px 0 0;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        <span>YouTube requires a video file. Deselect YouTube or upload a video instead.</span>
+      </div>
+
       <div class="form-actions">
         <button class="btn btn-primary" type="submit">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
@@ -36,4 +47,68 @@
       </div>
     </form>
   </div>
+
+  <script>
+    (function () {
+      var VIDEO_EXT = ["mp4", "mov", "avi", "mkv"];
+      var IMAGE_EXT = ["jpg", "jpeg", "png", "webp"];
+      var fileInput = document.getElementById("id_video");
+      var ytBox = document.querySelector('input[name="platforms"][value="youtube"]');
+      var ytLabel = ytBox ? ytBox.closest("label") || ytBox.parentNode : null;
+      var warning = document.getElementById("yt-image-warning");
+      var preview = document.getElementById("media-preview");
+      var box = preview.querySelector(".media-preview-box");
+      var label = preview.querySelector(".media-preview-label");
+
+      function kind(name) {
+        var ext = (name.split(".").pop() || "").toLowerCase();
+        if (VIDEO_EXT.indexOf(ext) > -1) return "video";
+        if (IMAGE_EXT.indexOf(ext) > -1) return "image";
+        return null;
+      }
+
+      function setYouTube(enabled) {
+        if (!ytBox) return;
+        if (!enabled) { ytBox.checked = false; }
+        ytBox.disabled = !enabled;
+        if (ytLabel) ytLabel.style.opacity = enabled ? "1" : "0.45";
+      }
+
+      function render() {
+        box.innerHTML = "";
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) {
+          preview.hidden = true;
+          warning.hidden = true;
+          setYouTube(false);   // no file yet → YouTube disabled until a video is picked
+          return;
+        }
+        var k = kind(file.name);
+        var url = URL.createObjectURL(file);
+        if (k === "image") {
+          var img = document.createElement("img");
+          img.src = url; box.appendChild(img);
+          label.textContent = "Image preview";
+          setYouTube(false);
+          warning.hidden = false;          // image + YouTube not allowed
+        } else if (k === "video") {
+          var vid = document.createElement("video");
+          vid.src = url; vid.controls = true; box.appendChild(vid);
+          label.textContent = "Video preview";
+          setYouTube(true);
+          warning.hidden = true;
+        } else {
+          label.textContent = "Unsupported file type";
+          setYouTube(false);
+          warning.hidden = true;
+        }
+        preview.hidden = false;
+      }
+
+      if (fileInput) {
+        fileInput.addEventListener("change", render);
+        render();   // initial state: YouTube disabled until a video is chosen
+      }
+    })();
+  </script>
 {% endblock %}

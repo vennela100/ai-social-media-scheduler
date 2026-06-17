@@ -5,13 +5,14 @@ from django import forms
 from .models import AIContent, Platform
 
 # --- Upload limits (decision point — tune to your needs) ---
-# Cloudinary's free tier caps a single video around 100 MB, so staying under
-# that avoids hard API rejections. Extensions are an allowlist: we check the
-# filename suffix AND let Cloudinary reject anything that isn't really media.
-MAX_UPLOAD_MB = 100
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
+# Separate caps per media type: video is large, images are small. Extensions are
+# an allowlist; Cloudinary's resource_type is the real backstop against fakes.
+VIDEO_MAX_MB = 500
+IMAGE_MAX_MB = 20
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
+MAX_MB_BY_TYPE = {"video": VIDEO_MAX_MB, "image": IMAGE_MAX_MB}
 
 
 def media_type_for(filename: str) -> str | None:
@@ -29,17 +30,24 @@ class VideoUploadForm(forms.Form):
 
     video = forms.FileField(
         label="Video or image file",
-        help_text=f"Up to {MAX_UPLOAD_MB} MB. Video: {', '.join(sorted(VIDEO_EXTENSIONS))}. "
-                  f"Image: {', '.join(sorted(IMAGE_EXTENSIONS))} (images can be posted to LinkedIn).",
+        help_text=f"Video ({', '.join(sorted(VIDEO_EXTENSIONS))}) up to {VIDEO_MAX_MB} MB · "
+                  f"Image ({', '.join(sorted(IMAGE_EXTENSIONS))}) up to {IMAGE_MAX_MB} MB. "
+                  f"Images can be posted to Instagram and LinkedIn (not YouTube).",
     )
     title = forms.CharField(
-        label="Video title (optional)",
+        label="Title (optional)",
         required=False,
         help_text="Leave blank to use the filename.",
     )
+    category = forms.CharField(
+        label="Category / niche (optional)",
+        required=False,
+        help_text="e.g. fitness, tech tutorials, cooking — helps the AI pick the right keywords.",
+        widget=forms.TextInput(attrs={"placeholder": "fitness, tech, education…"}),
+    )
     description = forms.CharField(
-        label="What is this video about?",
-        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "Describe what happens in the video, the key points, the tone you want. The more you say here, the better the AI's output."}),
+        label="What is this about?",
+        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "Describe the content, the key points, the tone you want. The more you say here, the better the AI's output."}),
         required=False,
         help_text="This is the main thing the AI writes from — your words become the source of truth.",
     )
@@ -54,18 +62,18 @@ class VideoUploadForm(forms.Form):
     def clean_video(self):
         f = self.cleaned_data["video"]
 
-        # Size guard — reject before we waste an upload round-trip.
-        max_bytes = MAX_UPLOAD_MB * 1024 * 1024
-        if f.size > max_bytes:
-            raise forms.ValidationError(
-                f"File is {f.size / 1024 / 1024:.1f} MB; the limit is {MAX_UPLOAD_MB} MB."
-            )
-
-        # Extension allowlist — a cheap first filter. Cloudinary's resource_type
-        # is the real backstop against files that lie about their extension.
-        if media_type_for(f.name) is None:
+        # Extension allowlist first, so we know which size cap to apply.
+        media_type = media_type_for(f.name)
+        if media_type is None:
             raise forms.ValidationError(
                 f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}."
+            )
+
+        # Per-type size guard — reject before we waste an upload round-trip.
+        max_mb = MAX_MB_BY_TYPE[media_type]
+        if f.size > max_mb * 1024 * 1024:
+            raise forms.ValidationError(
+                f"This {media_type} is {f.size / 1024 / 1024:.1f} MB; the {media_type} limit is {max_mb} MB."
             )
 
         return f
