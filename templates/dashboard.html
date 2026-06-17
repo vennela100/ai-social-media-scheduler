@@ -3,6 +3,19 @@
 {% block title %}Dashboard — Creator Studio{% endblock %}
 
 {% block content %}
+  {% for b in token_banners %}
+    <div class="token-banner {{ b.level }} reveal">
+      {% if b.level == "expired" %}
+        <span>❌ Your {{ b.name }} token has expired. Scheduled posts to {{ b.name }} are paused until you reconnect.</span>
+      {% elif b.level == "urgent" %}
+        <span>⚠️ Your {{ b.name }} token expires in {{ b.days }} day{{ b.days|pluralize }}. Reconnect now to avoid missed posts.</span>
+      {% else %}
+        <span>🔔 Your {{ b.name }} token expires in {{ b.days }} day{{ b.days|pluralize }}. Reconnect soon to keep your posts running.</span>
+      {% endif %}
+      <a class="btn btn-sm" href="{{ b.connect_url }}">Reconnect {{ b.name }}</a>
+    </div>
+  {% endfor %}
+
   <div class="page-head reveal">
     <div>
       <div class="eyebrow">Workspace</div>
@@ -116,7 +129,12 @@
                 <br><span class="sub" style="color:var(--text-faint);font-size:11.5px;">{{ post.get_visibility_display }}</span></td>
               <td class="mono" title="{{ post.scheduled_time_utc|utc|date:'Y-m-d H:i' }} UTC">{{ post.scheduled_time_utc|date:"M j, Y · H:i" }}</td>
               <td>
-                <span class="pill {{ post.status }}">{{ post.get_status_display }}</span>
+                {% if post.status == "needs_reconnect" %}
+                  <span class="pill failed" title="Token expired">Paused</span>
+                  <a class="reconnect-link" href="{{ post.reconnect_url }}">Reconnect {{ post.social_account.get_platform_display }}</a>
+                {% else %}
+                  <span class="pill {{ post.status }}">{{ post.get_status_display }}</span>
+                {% endif %}
                 {% if post.retry_count %}<span class="mono" style="margin-left:8px;" title="retry attempts">×{{ post.retry_count }}</span>{% endif %}
                 {% if post.last_error %}<div class="sub" style="color:var(--text-faint);font-size:12px;margin-top:4px;max-width:340px;">{{ post.last_error|truncatechars:120 }}</div>{% endif %}
               </td>

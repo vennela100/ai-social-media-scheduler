@@ -17,23 +17,42 @@ from django.conf import settings
 logger = logging.getLogger("scheduler")
 
 
-def notify_failure(post) -> None:
-    """Alert the user when a ScheduledPost exhausts its retries."""
-    # No-op cleanly until the user adds the Telegram secrets.
-    if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
-        logger.warning(
-            "notify_failure: Telegram not configured; skipping alert for post %s",
-            post.id,
-        )
-        return
+def _send(text: str, *, context: str) -> bool:
+    """Send a Telegram message. No-op (logged) if unconfigured; never raises.
 
-    message = f"Post {post.id} ({post.social_account.platform}) failed: {post.last_error}"
+    Returns True only if the send actually went out — callers use that to decide
+    whether to record that a reminder was delivered.
+    """
+    if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
+        logger.warning("%s: Telegram not configured; skipping alert", context)
+        return False
     try:
         requests.post(
             f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": settings.TELEGRAM_CHAT_ID, "text": message},
-            timeout=10,  # never hang the publish job on a slow Telegram API
+            data={"chat_id": settings.TELEGRAM_CHAT_ID, "text": text},
+            timeout=10,  # never hang the caller on a slow Telegram API
         )
+        return True
     except requests.RequestException as exc:
-        # Swallow + log: the post is already FAILED; a dropped alert is not fatal.
-        logger.error("notify_failure: could not send alert for post %s: %s", post.id, exc)
+        logger.error("%s: could not send Telegram alert: %s", context, exc)
+        return False
+
+
+def notify_failure(post) -> None:
+    """Alert the user when a ScheduledPost exhausts its retries."""
+    message = f"Post {post.id} ({post.social_account.platform}) failed: {post.last_error}"
+    _send(message, context=f"notify_failure[post {post.id}]")
+
+
+def notify_token_expiry(account, dashboard_url: str) -> bool:
+    """Warn the user a platform token is expiring/expired. Returns True if sent."""
+    days = account.days_until_expiry()
+    status_line = "Already expired" if account.is_expired() else f"Expires in {days} days"
+    message = (
+        "🔔 Token expiry warning\n\n"
+        f"Platform: {account.get_platform_display()}\n"
+        f"Status: {status_line}\n"
+        f"Action needed: Log in and reconnect at {dashboard_url}\n\n"
+        "Your scheduled posts will pause if not reconnected."
+    )
+    return _send(message, context=f"notify_token_expiry[{account.platform}]")

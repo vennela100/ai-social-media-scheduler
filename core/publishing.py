@@ -19,7 +19,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
 from . import instagram, linkedin, storage, youtube
-from .models import ScheduledPost, Video
+from .models import ScheduledPost, SocialAccount, Video
 from .notifications import notify_failure
 
 logger = logging.getLogger("scheduler")
@@ -143,9 +143,14 @@ def process_post(post: ScheduledPost) -> str:
         platform_post_id = publisher(post)
     except (RefreshError, ImproperlyConfigured) as exc:
         # Auth is dead — no number of retries fixes this; ask the user to reconnect.
+        # For YouTube this only fires when the *refresh* token is revoked (Part 8):
+        # flag the account so the connections page + banner go red.
         post.status = Status.NEEDS_RECONNECT
         post.last_error = f"Authentication failed: {exc}"[:1000]
         post.save(update_fields=["status", "last_error", "updated_at"])
+        SocialAccount.objects.filter(pk=post.social_account_id).update(
+            status=SocialAccount.Status.NEEDS_RECONNECT
+        )
         logger.warning("Post %s needs reconnect: %s", post.id, exc)
         notify_failure(post)
         return post.status
@@ -238,6 +243,29 @@ def run(now=None) -> dict:
     ).select_related("social_account", "video", "ai_content")
 
     for post in due:
+        account = post.social_account
+        # Skip a post whose token is dead BEFORE any API call — retrying with an
+        # expired token only wastes quota. Auto-refresh platforms (YouTube) are
+        # exempt: the publisher refreshes their access token silently.
+        if not account.auto_refreshes() and account.is_expired():
+            post.status = ScheduledPost.Status.NEEDS_RECONNECT
+            post.last_error = (
+                f"Token expired. Reconnect your {account.get_platform_display()} "
+                "account to resume this post."
+            )
+            post.save(update_fields=["status", "last_error", "updated_at"])
+            if account.status != SocialAccount.Status.EXPIRED:
+                SocialAccount.objects.filter(pk=account.pk).update(
+                    status=SocialAccount.Status.EXPIRED
+                )
+            logger.warning(
+                "[%s] Skipped post %s (%s): token expired at %s — needs reconnect",
+                now.isoformat(timespec="seconds"), post.id, account.platform,
+                account.token_expires_at,
+            )
+            summary["needs_reconnect"] += 1
+            continue
+
         if _cooling_down(post, now):
             summary["skipped_backoff"] += 1
             continue

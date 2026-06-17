@@ -29,6 +29,7 @@ from .forms import (
     media_type_for,
 )
 from .models import AIContent, ScheduledPost, SocialAccount, Video
+from .notifications import notify_token_expiry
 from .storage import (
     delete_media,
     get_usage,
@@ -81,6 +82,14 @@ def dashboard(request):
         for value, label in ScheduledPost.Status.choices
     ]
 
+    # Token-expiry banners + Telegram reminders for this user's accounts.
+    token_banners = _token_health(request)
+
+    # Resolve a direct reconnect link for any paused (needs_reconnect) post.
+    posts = list(posts)
+    for p in posts:
+        p.reconnect_url = _connect_url(p.social_account.platform)
+
     # Cloudinary storage used (None if not configured / lookup failed).
     usage = get_usage()
     storage = None
@@ -112,9 +121,49 @@ def dashboard(request):
             "summary": summary,
             "breakdown": breakdown,
             "storage": storage,
+            "token_banners": token_banners,
             "current_tz": timezone.get_current_timezone_name(),
         },
     )
+
+
+# Severity order for stacking expiry banners (most urgent first).
+_BANNER_ORDER = {"expired": 0, "urgent": 1, "warning": 2}
+
+
+def _token_health(request):
+    """Build expiry banners for the dashboard and fire throttled Telegram alerts.
+
+    Returns a list of banner dicts (worst first). Auto-refresh platforms (YouTube)
+    only surface when their refresh token is actually revoked. Telegram reminders
+    go out at most once per 24h per account.
+    """
+    accounts = list(SocialAccount.objects.filter(user=request.user))
+    banners = []
+    reminder_cutoff = timezone.now() - dt.timedelta(hours=24)
+    dashboard_url = request.build_absolute_uri(reverse("core:dashboard"))
+
+    for acc in accounts:
+        level = acc.health_level()
+        if level not in _BANNER_ORDER:
+            continue  # good / auto — nothing to show
+        banners.append({
+            "platform": acc.platform,
+            "name": acc.get_platform_display(),
+            "level": level,
+            "days": acc.days_until_expiry(),
+            "connect_url": _connect_url(acc.platform),
+        })
+        # Throttled Telegram reminder (skip auto-refresh platforms entirely).
+        if not acc.auto_refreshes() and (
+            acc.last_reminder_sent_at is None or acc.last_reminder_sent_at < reminder_cutoff
+        ):
+            if notify_token_expiry(acc, dashboard_url):
+                acc.last_reminder_sent_at = timezone.now()
+                acc.save(update_fields=["last_reminder_sent_at"])
+
+    banners.sort(key=lambda b: _BANNER_ORDER[b["level"]])
+    return banners
 
 
 def _create_pending_drafts(video, platforms):
@@ -540,6 +589,44 @@ def aicontent_edit(request, pk):
     return render(request, "aicontent_edit.html", {"form": form, "content": content})
 
 
+CONNECT_URL_NAMES = {
+    "youtube": "core:youtube_connect",
+    "instagram": "core:instagram_connect",
+    "linkedin": "core:linkedin_connect",
+}
+
+
+def _connect_url(platform):
+    return reverse(CONNECT_URL_NAMES[platform])
+
+
+def _after_connect(request, account):
+    """Post-(re)connect housekeeping: mark healthy, resume paused posts, toast.
+
+    Used by every OAuth callback so a reconnect transparently recovers: the
+    fresh token clears the bad status, any posts paused for this platform return
+    to PENDING (resuming at their original time), and the reminder clock resets.
+    """
+    account.status = SocialAccount.Status.CONNECTED
+    account.last_reminder_sent_at = None
+    account.save(update_fields=["status", "last_reminder_sent_at"])
+
+    resumed = ScheduledPost.objects.filter(
+        social_account=account, status=ScheduledPost.Status.NEEDS_RECONNECT
+    ).update(status=ScheduledPost.Status.PENDING, last_error="")
+
+    name = account.get_platform_display()
+    if account.auto_refreshes():
+        msg = f"{name} reconnected successfully. Auto-refreshed — no action needed."
+    elif account.token_expires_at:
+        msg = f"{name} reconnected successfully. Token valid until {account.token_expires_at:%b %d, %Y}."
+    else:
+        msg = f"{name} reconnected successfully."
+    if resumed:
+        msg += f" Resumed {resumed} paused post{'s' if resumed != 1 else ''}."
+    messages.success(request, msg)
+
+
 @login_required
 def connections(request):
     """Show connected platform accounts and connect/disconnect controls."""
@@ -584,14 +671,14 @@ def youtube_callback(request):
         creds = youtube.exchange_code(
             redirect_uri, request.build_absolute_uri(), state, code_verifier
         )
-        youtube.save_account(request.user, creds)
+        account = youtube.save_account(request.user, creds)
     except Exception as exc:
         logger.error("YouTube OAuth callback failed: %s", exc)
         detail = f" Details: {exc}" if settings.DEBUG else ""
         messages.error(request, f"Could not connect YouTube. Please try again.{detail}")
         return redirect("core:connections")
 
-    messages.success(request, "YouTube connected.")
+    _after_connect(request, account)
     return redirect("core:connections")
 
 
@@ -640,14 +727,14 @@ def instagram_callback(request):
     try:
         short_token, ig_user_id = instagram.exchange_code(redirect_uri, request.GET["code"])
         long_token, expires_in = instagram.long_lived_token(short_token)
-        instagram.save_account(request.user, long_token, ig_user_id, expires_in)
+        account = instagram.save_account(request.user, long_token, ig_user_id, expires_in)
     except Exception as exc:
         logger.error("Instagram OAuth callback failed: %s", exc)
         detail = f" Details: {exc}" if settings.DEBUG else ""
         messages.error(request, f"Could not connect Instagram. Please try again.{detail}")
         return redirect("core:connections")
 
-    messages.success(request, "Instagram connected.")
+    _after_connect(request, account)
     return redirect("core:connections")
 
 
@@ -688,14 +775,14 @@ def linkedin_callback(request):
     redirect_uri = request.build_absolute_uri(reverse("core:linkedin_callback"))
     try:
         token, expires_in = linkedin.exchange_code(redirect_uri, request.GET["code"])
-        linkedin.save_account(request.user, token, expires_in)
+        account = linkedin.save_account(request.user, token, expires_in)
     except Exception as exc:
         logger.error("LinkedIn OAuth callback failed: %s", exc)
         detail = f" Details: {exc}" if settings.DEBUG else ""
         messages.error(request, f"Could not connect LinkedIn. Please try again.{detail}")
         return redirect("core:connections")
 
-    messages.success(request, "LinkedIn connected.")
+    _after_connect(request, account)
     return redirect("core:connections")
 
 

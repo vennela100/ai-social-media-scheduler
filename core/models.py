@@ -10,8 +10,13 @@ The chain of ownership is:
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from .fields import EncryptedTextField
+
+# Platforms whose tokens auto-renew via a refresh token (Google/YouTube). We never
+# warn about their expiry — the publisher refreshes silently before each publish.
+AUTO_REFRESH_PLATFORMS = {"youtube"}
 
 
 class Platform(models.TextChoices):
@@ -23,6 +28,15 @@ class Platform(models.TextChoices):
 
 class SocialAccount(models.Model):
     """A user's authenticated connection to one platform. Tokens are encrypted."""
+
+    class Status(models.TextChoices):
+        CONNECTED = "connected", "Connected"
+        EXPIRED = "expired", "Expired"
+        NEEDS_RECONNECT = "needs_reconnect", "Needs reconnect"
+
+    # How many days of remaining token life map to each warning level.
+    WARN_DAYS = 14   # good at/above this
+    URGENT_DAYS = 7  # urgent below this
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -38,6 +52,13 @@ class SocialAccount(models.Model):
 
     platform_account_id = models.CharField(max_length=255, blank=True, default="")
     connected_at = models.DateTimeField(auto_now_add=True)
+    # When we last sent an expiry reminder (Telegram), to throttle to once/24h.
+    last_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    # Lifecycle flag, separate from the date-derived expiry_status(): set to
+    # EXPIRED/NEEDS_RECONNECT when a publish or refresh proves the token is dead.
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.CONNECTED
+    )
 
     class Meta:
         # One account per platform per user keeps OAuth bookkeeping simple.
@@ -49,6 +70,49 @@ class SocialAccount(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} · {self.get_platform_display()}"
+
+    # --- Token expiry helpers ---
+
+    def auto_refreshes(self) -> bool:
+        """True for platforms that renew their own token (YouTube)."""
+        return self.platform in AUTO_REFRESH_PLATFORMS
+
+    def days_until_expiry(self):
+        """Whole days until the token expires (negative if past). None if unknown."""
+        if not self.token_expires_at:
+            return None
+        return (self.token_expires_at - timezone.now()).days
+
+    def is_expired(self) -> bool:
+        """True if we know an expiry and it's in the past."""
+        return bool(self.token_expires_at and self.token_expires_at <= timezone.now())
+
+    def expiry_status(self) -> str:
+        """Date-derived severity: good (14+d) / warning (7-14d) / urgent (<7d) / expired."""
+        if self.token_expires_at is None:
+            return "good"  # unknown expiry — don't nag
+        if self.is_expired():
+            return "expired"
+        days = self.days_until_expiry()
+        if days < self.URGENT_DAYS:
+            return "urgent"
+        if days < self.WARN_DAYS:
+            return "warning"
+        return "good"
+
+    def health_level(self) -> str:
+        """What the UI should show: auto / good / warning / urgent / expired.
+
+        YouTube is always "auto" (silently refreshed) unless its refresh token was
+        revoked (status flipped to expired/needs_reconnect). A persisted bad status
+        on any platform forces "expired" regardless of dates.
+        """
+        bad = (self.Status.EXPIRED, self.Status.NEEDS_RECONNECT)
+        if self.auto_refreshes():
+            return "expired" if self.status in bad else "auto"
+        if self.status in bad:
+            return "expired"
+        return self.expiry_status()
 
 
 class Video(models.Model):

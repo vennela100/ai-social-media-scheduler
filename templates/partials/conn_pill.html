@@ -1,0 +1,14 @@
+{% comment %}Colour-coded token-health pill for one connected account.{% endcomment %}
+{% with lvl=account.health_level %}
+  {% if lvl == "auto" %}
+    <span class="hpill good">🟢 Auto-refreshed — no action needed</span>
+  {% elif lvl == "good" %}
+    <span class="hpill good">🟢 Valid{% if account.token_expires_at %} — expires {{ account.token_expires_at|date:"M j, Y" }}{% endif %}</span>
+  {% elif lvl == "warning" %}
+    <span class="hpill warning">🟡 Expiring soon — {{ account.days_until_expiry }} day{{ account.days_until_expiry|pluralize }}</span>
+  {% elif lvl == "urgent" %}
+    <span class="hpill urgent">🟠 Expires in {{ account.days_until_expiry }} day{{ account.days_until_expiry|pluralize }} — reconnect now</span>
+  {% else %}
+    <span class="hpill expired">🔴 Expired — posts paused</span>
+  {% endif %}
+{% endwith %}
