@@ -13,9 +13,11 @@ key, calls raise a clear ImproperlyConfigured instead of failing cryptically.
 import logging
 
 import cloudinary
+import cloudinary.api
 import cloudinary.uploader
 import cloudinary.utils
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 
 logger = logging.getLogger("scheduler")
@@ -23,6 +25,11 @@ logger = logging.getLogger("scheduler")
 # Folder inside your Cloudinary account where uploads land. Keeps the media
 # library tidy and makes it easy to find/clean app uploads.
 CLOUDINARY_FOLDER = "scheduler_videos"
+
+# Usage is an external API call, so cache it briefly: the dashboard can render
+# many times a minute, but Cloudinary's numbers barely move minute-to-minute.
+_USAGE_CACHE_KEY = "cloudinary_usage"
+_USAGE_TTL_SECONDS = 300
 
 
 def is_configured() -> bool:
@@ -88,3 +95,48 @@ def delete_media(public_id: str, *, media_type: str = "video") -> None:
     resource_type = "image" if media_type == "image" else "video"
     cloudinary.uploader.destroy(public_id, resource_type=resource_type, invalidate=True)
     logger.info("Deleted %s from Cloudinary: %s", resource_type, public_id)
+    cache.delete(_USAGE_CACHE_KEY)  # numbers just changed — force a fresh lookup
+
+
+def human_bytes(n: float) -> str:
+    """Format a byte count as a short human string, e.g. 12345678 -> '11.8 MB'."""
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def get_usage() -> dict | None:
+    """Return the Cloudinary account's usage, or None if unavailable.
+
+    A usage lookup must never break the dashboard, so this swallows every error
+    (not configured, network, auth) and returns None — the template then just
+    omits the storage card. Cached for a few minutes to avoid an API call on
+    every page load. Cloudinary's free tier is credit-based, so `storage.limit`
+    may be absent; we surface whatever the account reports.
+    """
+    if not is_configured():
+        return None
+    cached = cache.get(_USAGE_CACHE_KEY)
+    if cached is not None:
+        return cached
+    try:
+        _ensure_configured()
+        data = cloudinary.api.usage()
+    except Exception as exc:
+        logger.warning("Cloudinary usage lookup failed: %s", exc)
+        return None
+
+    storage = data.get("storage") or {}
+    credits = data.get("credits") or {}
+    result = {
+        "plan": data.get("plan", ""),
+        "storage_bytes": storage.get("usage", 0),
+        "storage_limit_bytes": storage.get("limit"),  # may be None on credit plans
+        "assets": (data.get("resources") if isinstance(data.get("resources"), int)
+                   else (data.get("objects") or {}).get("usage", 0)),
+        "credits_used_percent": credits.get("used_percent"),
+    }
+    cache.set(_USAGE_CACHE_KEY, result, _USAGE_TTL_SECONDS)
+    return result

@@ -29,7 +29,7 @@ from .forms import (
     media_type_for,
 )
 from .models import AIContent, ScheduledPost, SocialAccount, Video
-from .storage import delete_media, is_configured, upload_media
+from .storage import delete_media, get_usage, human_bytes, is_configured, upload_media
 
 logger = logging.getLogger("scheduler")
 
@@ -74,6 +74,18 @@ def dashboard(request):
         for value, label in ScheduledPost.Status.choices
     ]
 
+    # Cloudinary storage used (None if not configured / lookup failed).
+    usage = get_usage()
+    storage = None
+    if usage:
+        storage = {
+            "used": human_bytes(usage["storage_bytes"]),
+            "limit": human_bytes(usage["storage_limit_bytes"]) if usage["storage_limit_bytes"] else None,
+            "percent": usage["credits_used_percent"],
+            "assets": usage["assets"],
+            "plan": usage["plan"],
+        }
+
     return render(
         request,
         "dashboard.html",
@@ -82,6 +94,7 @@ def dashboard(request):
             "posts": posts,
             "summary": summary,
             "breakdown": breakdown,
+            "storage": storage,
             "current_tz": timezone.get_current_timezone_name(),
         },
     )
@@ -547,7 +560,15 @@ def instagram_callback(request):
         return redirect("core:connections")
 
     expected = request.session.pop("instagram_oauth_state", None)
-    if not expected or request.GET.get("state") != expected:
+    returned = request.GET.get("state")
+    if not expected or returned != expected:
+        # Log which failure mode so a recurring mismatch is diagnosable: a MISSING
+        # expected state = the session didn't carry it over (cookie/duplicate-tab
+        # issue); a DIFFERENT one = a stale or replayed callback.
+        logger.warning(
+            "Instagram state check failed: expected=%r returned=%r (session_key=%s)",
+            expected, returned, request.session.session_key,
+        )
         messages.error(request, "Instagram connection failed: state mismatch. Try again.")
         return redirect("core:connections")
 
