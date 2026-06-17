@@ -35,6 +35,22 @@ THUMBNAIL_MAX_WIDTH = 480
 _USAGE_CACHE_KEY = "cloudinary_usage"
 _USAGE_TTL_SECONDS = 300
 
+# When to warn the user that storage/credits are running out. Tune to taste:
+# below WARN is "ok", WARN–FULL shows a heads-up, at/above FULL is "act now".
+STORAGE_WARN_PERCENT = 80
+STORAGE_FULL_PERCENT = 95
+
+
+def usage_level(percent) -> str:
+    """Map a used-percentage to a severity: "ok" | "warn" | "full"."""
+    if percent is None:
+        return "ok"
+    if percent >= STORAGE_FULL_PERCENT:
+        return "full"
+    if percent >= STORAGE_WARN_PERCENT:
+        return "warn"
+    return "ok"
+
 
 def is_configured() -> bool:
     """True once the Cloudinary credentials are available."""

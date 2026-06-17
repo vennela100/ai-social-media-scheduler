@@ -21,7 +21,7 @@ from django.utils.crypto import get_random_string
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-from . import ai, instagram, linkedin, stats, youtube
+from . import ai, instagram, linkedin, publishing, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -29,7 +29,14 @@ from .forms import (
     media_type_for,
 )
 from .models import AIContent, ScheduledPost, SocialAccount, Video
-from .storage import delete_media, get_usage, human_bytes, is_configured, upload_media
+from .storage import (
+    delete_media,
+    get_usage,
+    human_bytes,
+    is_configured,
+    upload_media,
+    usage_level,
+)
 
 logger = logging.getLogger("scheduler")
 
@@ -78,12 +85,22 @@ def dashboard(request):
     usage = get_usage()
     storage = None
     if usage:
+        # Prefer an explicit storage-limit % if the plan has one; otherwise fall
+        # back to the credit usage % (the Free tier is credit-based, no byte cap).
+        percent = usage["credits_used_percent"]
+        if usage["storage_limit_bytes"]:
+            percent = max(percent or 0, usage["storage_bytes"] / usage["storage_limit_bytes"] * 100)
         storage = {
             "used": human_bytes(usage["storage_bytes"]),
             "limit": human_bytes(usage["storage_limit_bytes"]) if usage["storage_limit_bytes"] else None,
-            "percent": usage["credits_used_percent"],
+            "percent": percent,
+            "level": usage_level(percent),
             "assets": usage["assets"],
             "plan": usage["plan"],
+            # How many of this user's sources could be freed right now.
+            "cleanable": sum(
+                1 for v in videos if not v.source_deleted and v.cloudinary_public_id and v.is_fully_published()
+            ),
         }
 
     return render(
@@ -290,6 +307,36 @@ def video_delete(request, pk):
         logger.warning("Cloudinary delete failed for video %s: %s", video.pk, exc)
     video.delete()
     messages.success(request, "Video deleted, along with its drafts and scheduled posts.")
+    return redirect("core:dashboard")
+
+
+@require_POST
+@login_required
+def storage_cleanup(request):
+    """Archive the user's fully-published video sources right now to free space.
+
+    Same archive the scheduler does on a 7-day delay, but on demand and ignoring
+    the retention window — for when the user hits the "storage full" warning and
+    wants space back immediately. Keeps each video's thumbnail.
+    """
+    eligible = [
+        v for v in Video.objects.filter(user=request.user, source_deleted=False)
+        .exclude(cloudinary_public_id="")
+        if v.is_fully_published()
+    ]
+    freed = sum(1 for v in eligible if publishing._archive_source(v))
+    if freed:
+        messages.success(
+            request,
+            f"Freed up space: archived {freed} published video{'s' if freed != 1 else ''} "
+            "(thumbnails kept). Re-upload to post them again.",
+        )
+    else:
+        messages.info(
+            request,
+            "Nothing to clean up yet — only videos whose posts have all published "
+            "can be archived.",
+        )
     return redirect("core:dashboard")
 
 

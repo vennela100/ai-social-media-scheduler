@@ -12,6 +12,7 @@ urlpatterns = [
     path("upload/", views.upload, name="upload"),
     path("video/<int:pk>/", views.video_detail, name="video_detail"),
     path("video/<int:pk>/delete/", views.video_delete, name="video_delete"),
+    path("storage/cleanup/", views.storage_cleanup, name="storage_cleanup"),
     path("video/<int:pk>/generate/", views.generate, name="generate"),
     path("ai/<int:pk>/edit/", views.aicontent_edit, name="aicontent_edit"),
     path("ai/<int:pk>/generate/", views.generate_ai, name="generate_ai"),
