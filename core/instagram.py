@@ -54,6 +54,24 @@ POLL_INTERVAL_SECONDS = 5
 MAX_POLLS = 24  # ~2 minutes
 
 
+def _check(resp, context: str) -> dict:
+    """Raise with Instagram's own error message (not a bare HTTP 400) on failure.
+
+    The Graph API returns useful JSON like {"error":{"message":"API access
+    blocked.",...}}; raise_for_status() throws that away, leaving an opaque
+    "400 Bad Request" in the post's last_error. Surface the real message so a
+    failure is diagnosable from the dashboard.
+    """
+    if resp.ok:
+        return resp.json() if resp.content else {}
+    try:
+        err = resp.json().get("error", {})
+        detail = err.get("message") or resp.text
+    except ValueError:
+        detail = resp.text
+    raise RuntimeError(f"Instagram {context} failed ({resp.status_code}): {detail}")
+
+
 def is_configured() -> bool:
     return bool(settings.INSTAGRAM_APP_ID and settings.INSTAGRAM_APP_SECRET)
 
@@ -152,8 +170,7 @@ def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
         data={"media_type": "REELS", "video_url": video_url, "caption": caption, "access_token": token},
         timeout=60,
     )
-    create.raise_for_status()
-    creation_id = create.json()["id"]
+    creation_id = _check(create, "container create")["id"]
     logger.info("Instagram container created: %s", creation_id)
 
     # 2. Poll until Instagram has ingested the video.
@@ -163,8 +180,7 @@ def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
             params={"fields": "status_code", "access_token": token},
             timeout=30,
         )
-        status.raise_for_status()
-        code = status.json().get("status_code")
+        code = _check(status, "container status").get("status_code")
         if code == "FINISHED":
             break
         if code == "ERROR":
@@ -179,7 +195,6 @@ def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
         data={"creation_id": creation_id, "access_token": token},
         timeout=60,
     )
-    pub.raise_for_status()
-    media_id = pub.json()["id"]
+    media_id = _check(pub, "media publish")["id"]
     logger.info("Published to Instagram: %s", media_id)
     return media_id
