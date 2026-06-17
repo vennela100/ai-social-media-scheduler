@@ -505,9 +505,9 @@ def youtube_disconnect(request):
 
 @login_required
 def instagram_connect(request):
-    """Kick off the Facebook/Instagram OAuth flow."""
+    """Kick off the Instagram Login OAuth flow."""
     if not instagram.is_configured():
-        messages.error(request, "Instagram OAuth isn't configured (META_APP_ID/SECRET).")
+        messages.error(request, "Instagram OAuth isn't configured (INSTAGRAM_APP_ID/SECRET).")
         return redirect("core:connections")
 
     state = get_random_string(32)
@@ -518,7 +518,7 @@ def instagram_connect(request):
 
 @login_required
 def instagram_callback(request):
-    """Handle Facebook's redirect: exchange code, store the long-lived token."""
+    """Handle Instagram's redirect: exchange code, store the long-lived token."""
     if request.GET.get("error"):
         messages.error(request, f"Instagram authorization was denied: {request.GET.get('error_description', request.GET['error'])}.")
         return redirect("core:connections")
