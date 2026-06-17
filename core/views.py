@@ -259,7 +259,12 @@ def video_delete(request, pk):
     """Delete a video: its Cloudinary asset, its AI drafts, and its scheduled
     posts (the last two cascade via FK). POST-only so a stray link can't wipe it.
     """
-    video = get_object_or_404(Video, pk=pk, user=request.user)
+    # Don't 404 on an already-deleted video (stale page / double-submit): just
+    # tell the user it's gone and send them back to the dashboard.
+    video = Video.objects.filter(pk=pk, user=request.user).first()
+    if video is None:
+        messages.info(request, "That video was already deleted.")
+        return redirect("core:dashboard")
     if request.method != "POST":
         return redirect("core:video_detail", pk=video.pk)
     try:
