@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 from django.views.decorators.http import require_POST
-from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 
 from . import ai, analytics, instagram, linkedin, publishing, stats, youtube
 from .forms import (
@@ -1161,3 +1161,19 @@ def healthz(request):
     except Exception as exc:
         return JsonResponse({"status": "error", "detail": str(exc)}, status=503)
     return JsonResponse({"status": "ok"})
+
+
+@csrf_exempt
+def run_publisher(request):
+    """Publish due posts on demand. Pinged by an external cron (cron-job.org) every
+    minute so posts go out on time, unlike the throttled GitHub Actions schedule.
+
+    Guarded by a shared secret in settings.CRON_KEY (env CRON_KEY); pass it as
+    ?key=... or the X-Cron-Key header. Same logic the management command runs.
+    """
+    expected = getattr(settings, "CRON_KEY", "")
+    provided = request.GET.get("key") or request.headers.get("X-Cron-Key", "")
+    if not expected or provided != expected:
+        return JsonResponse({"status": "forbidden"}, status=403)
+    summary = publishing.run()
+    return JsonResponse({"status": "ok", "summary": summary})

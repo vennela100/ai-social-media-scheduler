@@ -40,4 +40,5 @@ urlpatterns = [
     path("connections/linkedin/disconnect/", views.linkedin_disconnect, name="linkedin_disconnect"),
     # Liveness check: 200 only if a trivial DB query succeeds.
     path("healthz/", views.healthz, name="healthz"),
+    path("tasks/run-publisher/", views.run_publisher, name="run_publisher"),
 ]

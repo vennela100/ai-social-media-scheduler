@@ -114,6 +114,11 @@ LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Shared secret guarding the /tasks/run-publisher/ endpoint, pinged by an
+# external cron (cron-job.org) every minute so posts publish on time. Blank =
+# endpoint always 403s (disabled).
+CRON_KEY = os.environ.get("CRON_KEY", "")
+
 # --- Email notifications ---
 # SMTP credentials for outbound alert emails (publish success / failure /
 # skipped / token-expiry). For Gmail, EMAIL_HOST_USER is your address and
