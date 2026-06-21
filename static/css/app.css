@@ -133,7 +133,8 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 }
 .user-chip .who { font-size: 13.5px; font-weight: 600; }
 .user-chip .who small { display: block; color: var(--text-faint); font-weight: 400; font-size: 11px; }
-.logout { background: none; border: none; cursor: pointer; color: var(--text-faint); margin-left: auto; padding: 6px; border-radius: 8px; display: grid; transition: color 0.18s, background 0.18s; }
+.logout { background: none; border: none; cursor: pointer; color: var(--text-faint); margin-left: auto; padding: 6px 10px; border-radius: 8px; display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; transition: color 0.18s, background 0.18s; }
+.logout svg { width: 17px; height: 17px; }
 .logout:hover { color: var(--bad); background: var(--bad-soft); }
 
 /* ---------- Main content ---------- */
@@ -406,7 +407,9 @@ input[type="file"] { padding: 22px; border-style: dashed; cursor: pointer; backg
   .brand { padding: 0; }
   .brand .meta { display: none; }
   .nav { flex-direction: row; }
-  .nav-label, .sidebar-foot { display: none; }
+  .nav-label { display: none; }
+  .sidebar-foot { margin: 0 0 0 auto; padding: 0; border: none; }
+  .sidebar-foot .who { display: none; }
   .nav a span { display: none; }
   .nav a.active::before { display: none; }
   .main { padding: 28px 20px 56px; }
