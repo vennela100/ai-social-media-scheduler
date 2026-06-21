@@ -1,28 +1,64 @@
 """Forms for the core app."""
 
 from django import forms
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
 
 from .models import AIContent, Platform
 
 
-class SignupForm(UserCreationForm):
-    """Account creation with a required email, so publish alerts can reach the
-    user (each account gets its own notifications at its own address)."""
+class SignupForm(forms.Form):
+    """Email-based account creation — no username. The email is the login id and
+    the address publish alerts are sent to. Stored as the User.username too, so
+    the default auth backend logs the user in by email with no custom backend."""
 
-    email = forms.EmailField(required=True, help_text="For publish success/failure alerts.")
+    email = forms.EmailField(
+        label="Email",
+        widget=forms.EmailInput(attrs={"placeholder": "you@example.com", "autocomplete": "email"}),
+    )
+    password1 = forms.CharField(
+        label="Password", widget=forms.PasswordInput(attrs={"autocomplete": "new-password"})
+    )
+    password2 = forms.CharField(
+        label="Confirm password", widget=forms.PasswordInput(attrs={"autocomplete": "new-password"})
+    )
 
-    class Meta(UserCreationForm.Meta):
-        model = User
-        fields = ("username", "email")
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip().lower()
+        if User.objects.filter(username=email).exists() or User.objects.filter(email=email).exists():
+            raise forms.ValidationError("An account with this email already exists.")
+        return email
 
-    def save(self, commit=True):
-        user = super().save(commit=False)
-        user.email = self.cleaned_data["email"]
-        if commit:
-            user.save()
-        return user
+    def clean(self):
+        cleaned = super().clean()
+        p1, p2 = cleaned.get("password1"), cleaned.get("password2")
+        if p1 and p2 and p1 != p2:
+            self.add_error("password2", "The two passwords don't match.")
+        if p1:
+            validate_password(p1)
+        return cleaned
+
+    def save(self):
+        email = self.cleaned_data["email"]
+        return User.objects.create_user(
+            username=email, email=email, password=self.cleaned_data["password1"]
+        )
+
+
+class EmailLoginForm(AuthenticationForm):
+    """Login form relabelled to ask for Email instead of Username (the username
+    field holds the email, so the default backend authenticates unchanged)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["username"].label = "Email"
+        self.fields["username"].widget = forms.EmailInput(
+            attrs={"autofocus": True, "placeholder": "you@example.com", "autocomplete": "email"}
+        )
+
+    def clean_username(self):
+        return self.cleaned_data.get("username", "").strip().lower()
 
 # --- Upload limits (decision point — tune to your needs) ---
 # Separate caps per media type: video is large, images are small. Extensions are
