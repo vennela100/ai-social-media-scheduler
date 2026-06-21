@@ -29,9 +29,10 @@ logger = logging.getLogger("scheduler")
 STUCK_PROCESSING_MINUTES = 30
 
 # Days to keep a fully-published video's source before archiving it (deleting the
-# heavy Cloudinary file, keeping only a thumbnail). The window gives the user time
-# to schedule the same video to more platforms before its source disappears.
-SOURCE_RETENTION_DAYS = int(os.environ.get("SOURCE_RETENTION_DAYS", "7"))
+# heavy Cloudinary file, keeping only a thumbnail). 0 = archive as soon as every
+# post is published, since the video is already safe on each platform. Raise it to
+# give yourself a window to schedule the same source to more platforms first.
+SOURCE_RETENTION_DAYS = int(os.environ.get("SOURCE_RETENTION_DAYS", "0"))
 
 
 # --- Per-platform publishers: each takes a post, returns the platform post id ---
