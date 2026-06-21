@@ -1,9 +1,9 @@
 ﻿"""
-Instagram (Instagram API with Instagram Login) OAuth + publishing â€” Phase 5.
+Instagram (Instagram API with Instagram Login) OAuth + publishing — Phase 5.
 
 This uses Meta's NEWER "Instagram API with Instagram login" flow (not the older
-Facebook-Page-based Graph API). The user logs in with Instagram directly â€” no
-Facebook Page required â€” and we talk to graph.instagram.com.
+Facebook-Page-based Graph API). The user logs in with Instagram directly — no
+Facebook Page required — and we talk to graph.instagram.com.
 
 Auth:
   1. Send the user to instagram.com/oauth/authorize (Instagram app id + the

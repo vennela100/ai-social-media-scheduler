@@ -74,7 +74,7 @@
               </select>
               <span class="time-colon">:</span>
               <select class="fld" name="sched_minute" required aria-label="Minute">
-                <option value="00">00</option><option value="05">05</option><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option><option value="30">30</option><option value="35">35</option><option value="40">40</option><option value="45">45</option><option value="50">50</option><option value="55">55</option>
+                {% for m in minutes %}<option value="{{ m|stringformat:"02d" }}">{{ m|stringformat:"02d" }}</option>{% endfor %}
               </select>
               <select class="fld" name="sched_ampm" required aria-label="AM or PM">
                 <option value="AM">AM</option><option value="PM">PM</option>
@@ -160,10 +160,7 @@
                   </select>
                   <span class="time-colon">:</span>
                   <select class="fld" name="sched_minute" required aria-label="Minute">
-                    <option value="00">00</option><option value="05">05</option><option value="10">10</option>
-                    <option value="15">15</option><option value="20">20</option><option value="25">25</option>
-                    <option value="30">30</option><option value="35">35</option><option value="40">40</option>
-                    <option value="45">45</option><option value="50">50</option><option value="55">55</option>
+                    {% for m in minutes %}<option value="{{ m|stringformat:"02d" }}">{{ m|stringformat:"02d" }}</option>{% endfor %}
                   </select>
                   <select class="fld" name="sched_ampm" required aria-label="AM or PM">
                     <option value="AM">AM</option><option value="PM">PM</option>

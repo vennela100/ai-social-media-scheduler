@@ -79,7 +79,7 @@ def dashboard(request):
         .select_related("video", "social_account")
     )
 
-    # One grouped query â†’ {status: count}. Drives the headline stat cards and
+    # One grouped query → {status: count}. Drives the headline stat cards and
     # the status breakdown strip below, instead of len() on the whole queryset.
     counts = {
         row["status"]: row["count"]
@@ -90,7 +90,7 @@ def dashboard(request):
     try:
         summary["success_rate"] = stats.success_rate(counts)
     except NotImplementedError:
-        # Learning-mode stub not implemented yet â€” show "â€”" rather than crash.
+        # Learning-mode stub not implemented yet — show "—" rather than crash.
         summary["success_rate"] = None
 
     # Per-status breakdown in the model's declared order, for the pills strip.
@@ -295,7 +295,7 @@ def _token_health(request):
     for acc in accounts:
         level = acc.health_level()
         if level not in _BANNER_ORDER:
-            continue  # good / auto â€” nothing to show
+            continue  # good / auto — nothing to show
         banners.append({
             "platform": acc.platform,
             "name": acc.get_platform_display(),
@@ -344,7 +344,7 @@ def upload(request):
             try:
                 result = upload_media(form.cleaned_data["video"], media_type=media_type)
             except ImproperlyConfigured as exc:
-                # Cloudinary key not set yet â€” tell the user plainly, don't 500.
+                # Cloudinary key not set yet — tell the user plainly, don't 500.
                 messages.error(request, f"Upload service not ready: {exc}")
                 return render(request, "upload.html", _upload_context(form))
             except Exception as exc:  # network / Cloudinary error
@@ -370,7 +370,7 @@ def upload(request):
             if platforms:
                 messages.success(
                     request,
-                    f"Uploaded. Generating content for {len(platforms)} platform(s) â€” "
+                    f"Uploaded. Generating content for {len(platforms)} platform(s) — "
                     "review, edit, and schedule below.",
                 )
             else:
@@ -424,6 +424,8 @@ def video_detail(request, pk):
             "ai_ready": ai.is_configured(),
             "has_description": bool(video.user_description.strip()),
             "current_tz": timezone.get_current_timezone_name(),
+            "hours": range(1, 13),
+            "minutes": range(60),
         },
     )
 
@@ -433,8 +435,8 @@ def video_detail(request, pk):
 def generate_ai(request, pk):
     """Generate (or regenerate) one draft from the video's title + description.
 
-    Returns JSON so the review page can fire these in parallel â€” one per
-    platform â€” each updating its own card when it resolves.
+    Returns JSON so the review page can fire these in parallel — one per
+    platform — each updating its own card when it resolves.
     """
     content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
     video = content.video
@@ -442,7 +444,7 @@ def generate_ai(request, pk):
     # We persist with QuerySet.update() (a pure UPDATE) instead of content.save().
     # save() falls back to an INSERT if the row vanished mid-request (e.g. the
     # user deleted the video while it was generating), which then trips the FK.
-    # update() just touches 0 rows in that case â€” no crash.
+    # update() just touches 0 rows in that case — no crash.
     rows = AIContent.objects.filter(pk=content.pk)
 
     if not ai.is_configured():
@@ -460,11 +462,11 @@ def generate_ai(request, pk):
             media_type=video.media_type,
             category=video.category,
         )
-    except Exception as exc:  # SDK / network / parse â€” isolate to this platform
+    except Exception as exc:  # SDK / network / parse — isolate to this platform
         logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
         rows.update(generation_status=AIContent.GenStatus.FAILED)
         return JsonResponse(
-            {"ok": False, "error": "Generation failed â€” tap regenerate to retry."}, status=200
+            {"ok": False, "error": "Generation failed — tap regenerate to retry."}, status=200
         )
 
     rows.update(
@@ -475,7 +477,7 @@ def generate_ai(request, pk):
         generation_status=AIContent.GenStatus.DONE,
     )
 
-    # Nudge the user to describe the video when they didn't â€” better output next time.
+    # Nudge the user to describe the video when they didn't — better output next time.
     notice = "" if video.user_description.strip() else "For better results, describe your video above."
     return JsonResponse(
         {
@@ -520,7 +522,7 @@ def storage_cleanup(request):
     """Archive the user's fully-published video sources right now to free space.
 
     Same archive the scheduler does on a 7-day delay, but on demand and ignoring
-    the retention window â€” for when the user hits the "storage full" warning and
+    the retention window — for when the user hits the "storage full" warning and
     wants space back immediately. Keeps each video's thumbnail.
     """
     eligible = [
@@ -538,7 +540,7 @@ def storage_cleanup(request):
     else:
         messages.info(
             request,
-            "Nothing to clean up yet â€” only videos whose posts have all published "
+            "Nothing to clean up yet — only videos whose posts have all published "
             "can be archived.",
         )
     return redirect("core:storage")
@@ -676,7 +678,7 @@ def _final_caption(content):
 
 
 # Which platforms can actually publish a still image today. YouTube is video-only;
-# our Instagram publisher only does video Reels â€” so images go to LinkedIn alone.
+# our Instagram publisher only does video Reels — so images go to LinkedIn alone.
 # (Decision point: widen this once an Instagram image-post path exists.)
 IMAGE_PLATFORMS = {"linkedin"}
 
@@ -685,7 +687,7 @@ def _normalize_visibility(platform: str, raw):
     """Clamp a requested visibility to what the platform can actually honour.
 
     Instagram reels are always public; LinkedIn only offers PUBLIC or CONNECTIONS
-    (so "unlisted" collapses to privateâ†’CONNECTIONS); an unknown value falls back
+    (so "unlisted" collapses to private→CONNECTIONS); an unknown value falls back
     to PUBLIC. Keeps the stored row, dashboard, and publisher in agreement and
     stops a tampered form from saving a bogus value.
     """
@@ -705,7 +707,7 @@ def schedule_content(request, pk):
     if request.method != "POST":
         return redirect("core:video_detail", pk=content.video.pk)
 
-    # The source file is archived after publishing â€” there's nothing left to post.
+    # The source file is archived after publishing — there's nothing left to post.
     if content.video.source_deleted:
         messages.error(
             request,
@@ -717,7 +719,7 @@ def schedule_content(request, pk):
     if content.video.media_type == "image" and content.platform not in IMAGE_PLATFORMS:
         messages.error(
             request,
-            f"{content.get_platform_display()} can't post a still image â€” images can "
+            f"{content.get_platform_display()} can't post a still image — images can "
             f"only go to {', '.join(p.title() for p in IMAGE_PLATFORMS)} right now.",
         )
         return redirect("core:video_detail", pk=content.video.pk)
@@ -773,7 +775,7 @@ def schedule_content(request, pk):
     messages.success(
         request,
         f"Scheduled to {content.get_platform_display()} ({post.get_visibility_display()}) "
-        f"for {when:%b %d, %Y Â· %H:%M} UTC.",
+        f"for {when:%b %d, %Y · %H:%M} UTC.",
     )
     return redirect("core:dashboard")
 
@@ -874,7 +876,7 @@ def refresh_stats(request):
     if n:
         messages.success(request, f"Updated stats for {n} post{'s' if n != 1 else ''}.")
     else:
-        messages.info(request, "No new stats â€” already up to date (or none published yet).")
+        messages.info(request, "No new stats — already up to date (or none published yet).")
     return redirect("core:dashboard")
 
 
@@ -934,7 +936,7 @@ def post_cancel(request, pk):
     if not post.is_editable():
         messages.error(
             request,
-            "This post can't be cancelled â€” it's already publishing or published.",
+            "This post can't be cancelled — it's already publishing or published.",
         )
         return redirect("core:dashboard")
     platform = post.social_account.get_platform_display()
@@ -980,7 +982,7 @@ def post_edit(request, pk):
     """Edit a pending post's publish time and visibility before it goes out."""
     post = get_object_or_404(ScheduledPost, pk=pk, video__user=request.user)
     if not post.is_editable():
-        messages.error(request, "This post can't be edited â€” it's already publishing or published.")
+        messages.error(request, "This post can't be edited — it's already publishing or published.")
         return redirect("core:dashboard")
 
     if request.method != "POST":
@@ -1012,7 +1014,7 @@ def post_edit(request, pk):
     ])
     messages.success(
         request,
-        f"Updated â€” now scheduled for {when:%b %d, %Y Â· %H:%M} UTC ({post.get_visibility_display()}).",
+        f"Updated — now scheduled for {when:%b %d, %Y · %H:%M} UTC ({post.get_visibility_display()}).",
     )
     return redirect("core:dashboard")
 
@@ -1095,7 +1097,7 @@ def _after_connect(request, account):
 
     name = account.get_platform_display()
     if account.auto_refreshes():
-        msg = f"{name} reconnected successfully. Auto-refreshed â€” no action needed."
+        msg = f"{name} reconnected successfully. Auto-refreshed — no action needed."
     elif account.token_expires_at:
         msg = f"{name} reconnected successfully. Token valid until {account.token_expires_at:%b %d, %Y}."
     else:
@@ -1222,7 +1224,7 @@ def instagram_callback(request):
         # Log which failure mode so a recurring mismatch is diagnosable: "missing"
         # = the session didn't carry the state over (cookie/duplicate-tab issue);
         # "mismatch" = a stale or replayed callback. We deliberately log neither the
-        # state values nor the session key â€” those are sensitive (session hijack).
+        # state values nor the session key — those are sensitive (session hijack).
         mode = "missing" if not expected else "mismatch"
         logger.warning("Instagram state check failed: mode=%s", mode)
         messages.error(request, "Instagram connection failed: state mismatch. Try again.")
