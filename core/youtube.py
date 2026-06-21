@@ -22,8 +22,13 @@ from .models import Platform, SocialAccount
 
 logger = logging.getLogger("scheduler")
 
-# youtube.upload is the minimal scope needed to publish a video.
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# youtube.upload publishes a video; youtube.readonly lets us read back a video's
+# statistics (views/likes/comments) for analytics. Adding readonly means existing
+# connections must reconnect once to re-consent to the wider scope.
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 # Default visibility of uploaded videos. Decision point — 'private' is the safe
@@ -205,3 +210,36 @@ def publish(account: SocialAccount, *, video_url: str, title: str, description: 
     video_id = response["id"]
     logger.info("Published to YouTube: %s", video_id)
     return video_id
+
+
+# --- Analytics ---
+
+def fetch_stats(account: SocialAccount, video_id: str) -> dict | None:
+    """Return {"views","likes","comments"} for a published video, or None.
+
+    videos.list(part=statistics) is a public read, so the existing upload-scoped
+    token is enough. likeCount/commentCount can be hidden by the creator — those
+    come back absent, which we surface as None (not 0). Never raises: any failure
+    degrades to None so the dashboard simply keeps the last known numbers.
+    """
+    if not video_id:
+        return None
+    try:
+        from googleapiclient.discovery import build
+
+        creds = get_credentials(account)
+        youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        items = youtube.videos().list(part="statistics", id=video_id).execute().get("items", [])
+        if not items:
+            logger.warning("YouTube stats: video %s not found", video_id)
+            return None
+        s = items[0].get("statistics", {})
+        as_int = lambda key: int(s[key]) if key in s else None
+        return {
+            "views": as_int("viewCount"),
+            "likes": as_int("likeCount"),
+            "comments": as_int("commentCount"),
+        }
+    except Exception as exc:  # API / refresh / parse — keep analytics non-fatal
+        logger.warning("YouTube stats fetch failed for %s: %s", video_id, exc)
+        return None

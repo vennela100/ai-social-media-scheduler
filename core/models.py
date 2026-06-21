@@ -1,4 +1,4 @@
-"""
+﻿"""
 Core data models for the AI Social Media Scheduler.
 
 The chain of ownership is:
@@ -15,7 +15,7 @@ from django.utils import timezone
 from .fields import EncryptedTextField
 
 # Platforms whose tokens auto-renew via a refresh token (Google/YouTube). We never
-# warn about their expiry — the publisher refreshes silently before each publish.
+# warn about their expiry â€” the publisher refreshes silently before each publish.
 AUTO_REFRESH_PLATFORMS = {"youtube"}
 
 
@@ -69,7 +69,7 @@ class SocialAccount(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"{self.user} · {self.get_platform_display()}"
+        return f"{self.user} Â· {self.get_platform_display()}"
 
     # --- Token expiry helpers ---
 
@@ -90,7 +90,7 @@ class SocialAccount(models.Model):
     def expiry_status(self) -> str:
         """Date-derived severity: good (14+d) / warning (7-14d) / urgent (<7d) / expired."""
         if self.token_expires_at is None:
-            return "good"  # unknown expiry — don't nag
+            return "good"  # unknown expiry â€” don't nag
         if self.is_expired():
             return "expired"
         days = self.days_until_expiry()
@@ -118,8 +118,8 @@ class SocialAccount(models.Model):
 class Video(models.Model):
     """An uploaded source asset (video or image), stored on Cloudinary (public URL).
 
-    The model keeps the name `Video` for historical reasons — most uploads are
-    videos — but `media_type` lets it also hold a still image (e.g. a certificate
+    The model keeps the name `Video` for historical reasons â€” most uploads are
+    videos â€” but `media_type` lets it also hold a still image (e.g. a certificate
     to share on LinkedIn). The type drives the Cloudinary resource_type and the
     LinkedIn publish recipe.
     """
@@ -139,7 +139,8 @@ class Video(models.Model):
     file_url = models.URLField(max_length=500)
     thumbnail_url = models.URLField(max_length=500, blank=True, default="")
     original_filename = models.CharField(max_length=255, blank=True, default="")
-    # Cloudinary's public_id for this asset — kept so we can delete the remote
+    source_size_bytes = models.PositiveBigIntegerField(default=0)
+    # Cloudinary's public_id for this asset â€” kept so we can delete the remote
     # file when the user deletes the video (the URL alone is awkward to reverse).
     cloudinary_public_id = models.CharField(max_length=300, blank=True, default="")
     # Once every scheduled post for this video has published, the heavy source
@@ -216,9 +217,9 @@ class ScheduledPost(models.Model):
 
     class Visibility(models.TextChoices):
         # Who can see the post once published. Interpreted per platform:
-        #   YouTube  → privacyStatus public / unlisted / private
-        #   LinkedIn → PUBLIC, or CONNECTIONS-only for unlisted/private
-        #   Instagram→ always public (the API can't publish private reels)
+        #   YouTube  â†’ privacyStatus public / unlisted / private
+        #   LinkedIn â†’ PUBLIC, or CONNECTIONS-only for unlisted/private
+        #   Instagramâ†’ always public (the API can't publish private reels)
         PUBLIC = "public", "Public"
         UNLISTED = "unlisted", "Unlisted"
         PRIVATE = "private", "Private"
@@ -254,6 +255,15 @@ class ScheduledPost(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Engagement pulled back from the platform after publishing (analytics). Null
+    # means "not fetched yet" OR "this platform can't report this metric" (e.g.
+    # LinkedIn member posts expose no view count via the self-serve API), so the
+    # UI shows "â€”" rather than a misleading 0. stats_updated_at gates re-fetching.
+    stat_views = models.PositiveIntegerField(null=True, blank=True)
+    stat_likes = models.PositiveIntegerField(null=True, blank=True)
+    stat_comments = models.PositiveIntegerField(null=True, blank=True)
+    stats_updated_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["scheduled_time_utc"]
         indexes = [
@@ -263,11 +273,28 @@ class ScheduledPost(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"{self.get_status_display()} → {self.social_account} @ {self.scheduled_time_utc:%Y-%m-%d %H:%M}Z"
+        return f"{self.get_status_display()} â†’ {self.social_account} @ {self.scheduled_time_utc:%Y-%m-%d %H:%M}Z"
 
     def can_retry(self) -> bool:
         """True while we still have retry attempts left for this post."""
         return self.retry_count < self.MAX_RETRIES
+
+    def is_editable(self) -> bool:
+        """True if the user can still change or cancel this post.
+
+        Anything not yet handed to a platform is fair game: pending, paused for
+        reconnect, or permanently failed. PROCESSING is mid-publish (don't touch)
+        and PUBLISHED is already live (can't unsend).
+        """
+        return self.status in (
+            self.Status.PENDING, self.Status.NEEDS_RECONNECT, self.Status.FAILED
+        )
+
+    def has_stats(self) -> bool:
+        """True once any engagement metric has been pulled back from the platform."""
+        return self.stats_updated_at is not None and any(
+            v is not None for v in (self.stat_views, self.stat_likes, self.stat_comments)
+        )
 
     def next_retry_delay_seconds(self) -> int:
         """
@@ -282,11 +309,19 @@ class ScheduledPost(models.Model):
             delays get rounded up anyway; pick values that span useful spreads.
           - A cap: without one, exponential growth can push retries hours out.
           - Jitter: if many posts fail at once (e.g. an API blip), identical
-            backoff makes them all retry in lockstep — jitter spreads the load.
+            backoff makes them all retry in lockstep â€” jitter spreads the load.
 
         TODO(you): implement the backoff. A common shape is:
             base * (factor ** (retry_count - 1)), clamped to a max, +/- jitter.
         Until you do, the scheduler falls back to "retry on the next tick"
-        (no backoff) and logs a warning — so it works, just not optimally.
+        (no backoff) and logs a warning â€” so it works, just not optimally.
         """
-        raise NotImplementedError("Implement next_retry_delay_seconds()")
+        import random
+
+        base = 300        # 5 minutes
+        factor = 2
+        cap = 3600        # never wait more than an hour
+        attempts = max(self.retry_count, 1)
+        delay = min(base * (factor ** (attempts - 1)), cap)
+        jitter = delay * 0.1
+        return int(delay + random.uniform(-jitter, jitter))

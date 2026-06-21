@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Storage - Cadence{% endblock %}
+
+{% block content %}
+  <div class="page-head reveal">
+    <div>
+      <div class="eyebrow">Workspace</div>
+      <h1>Storage</h1>
+      <p>Review uploaded source files and archive published media safely.</p>
+    </div>
+    <a class="btn btn-primary" href="{% url 'core:upload' %}">Upload video</a>
+  </div>
+
+  <div class="metric-strip reveal">
+    <div class="metric">
+      <span class="label">Your sources</span>
+      <b>{{ storage.user_active }}</b>
+      <span class="cap">live, not archived</span>
+    </div>
+    <div class="metric">
+      <span class="label">Ready to clean</span>
+      <b>{{ storage.cleanable }}</b>
+      <span class="cap">{% if storage.cleanable %}{{ storage.cleanable_label }}{% else %}nothing pending{% endif %}</span>
+    </div>
+    {% if storage.used %}
+      <div class="metric">
+        <span class="label">Cloudinary</span>
+        <b>{{ storage.used }}</b>
+        <span class="cap">{{ storage.assets }} asset{{ storage.assets|pluralize }}{% if storage.plan %} · {{ storage.plan }}{% endif %}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Credits</span>
+        <b>{{ storage.percent|floatformat:1 }}%</b>
+        <span class="cap">of plan used</span>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card reveal" style="margin-top:18px;">
+    {% if storage.cleanable %}
+      <form method="post" action="{% url 'core:storage_cleanup' %}"
+            onsubmit="return confirm('Archive {{ storage.cleanable }} fully-published source file(s)? Thumbnails and history stay visible.');">
+        {% csrf_token %}
+        <button class="btn btn-primary" type="submit">Clean up {{ storage.cleanable }} published source{{ storage.cleanable|pluralize }}</button>
+      </form>
+      <p class="sub storage-help">Deletes only source files that have finished publishing. Thumbnails and post history are kept.</p>
+    {% else %}
+      <button class="btn btn-primary" type="button" disabled>Clean up published sources</button>
+      <p class="sub storage-help">Nothing can be cleaned right now. Existing sources are already archived, or their posts have not finished publishing.</p>
+    {% endif %}
+  </div>
+
+  {% if videos %}
+    <div class="card danger-zone reveal" style="margin-top:18px;">
+      <div>
+        <b>Delete all uploads</b>
+        <p class="sub storage-help">
+          Permanently deletes every video above and its Cloudinary file — published or not —
+          along with all drafts and scheduled posts. This cannot be undone.
+        </p>
+      </div>
+      <form method="post" action="{% url 'core:storage_delete_all' %}"
+            onsubmit="return prompt('This permanently deletes ALL {{ videos|length }} upload{{ videos|length|pluralize }} and cannot be undone.\n\nType DELETE to confirm:') === 'DELETE';">
+        {% csrf_token %}
+        <button class="btn btn-danger" type="submit">Delete all uploads</button>
+      </form>
+    </div>
+  {% endif %}
+
+  <div class="section-head reveal">
+    <h2>Your uploads</h2>
+  </div>
+
+  {% if videos %}
+    <div class="table-wrap reveal">
+      <table>
+        <thead><tr><th>File</th><th>Type</th><th>Source storage</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for video in videos %}
+            <tr>
+              <td>
+                <a href="{% url 'core:video_detail' video.pk %}">{{ video }}</a>
+                <br><span class="sub" style="color:var(--text-faint);font-size:12px;">Uploaded {{ video.uploaded_at|date:"M j, Y" }}</span>
+              </td>
+              <td><span class="media-badge {{ video.media_type }}">{{ video.get_media_type_display }}</span></td>
+              <td>
+                {% if video.source_deleted %}
+                  <span class="sub" style="color:var(--text-faint);">Archived · thumbnail kept</span>
+                {% else %}
+                  {{ video.source_size_bytes|filesizeformat }}
+                {% endif %}
+              </td>
+              <td>
+                {% if video.is_fully_published %}
+                  <span class="pill published">Fully published</span>
+                {% else %}
+                  <span class="pill pending">Still needed</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if video.can_archive_source %}
+                  <form method="post" action="{% url 'core:video_archive_source' video.pk %}"
+                        onsubmit="return confirm('Archive this source file? The thumbnail and post history stay visible.');">
+                    {% csrf_token %}
+                    <button class="btn btn-ghost btn-sm" type="submit">Archive source</button>
+                  </form>
+                {% elif video.source_deleted %}
+                  <span class="sub" style="color:var(--text-faint);">No action</span>
+                {% else %}
+                  <span class="sub" style="color:var(--text-faint);">Publish all posts first</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty reveal">
+      <p>No uploads yet.</p>
+    </div>
+  {% endif %}
+{% endblock %}

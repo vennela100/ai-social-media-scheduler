@@ -48,11 +48,14 @@ def success_rate(counts: dict[str, int]) -> float | None:
         undefined — returning None lets the template show a friendly "—"
         instead of a misleading 0% or a divide-by-zero crash.
 
-    TODO(you): implement this. Roughly:
-        published = counts.get(S.PUBLISHED, 0)
-        denominator = <the set of statuses you decide count>
-        return None if denominator == 0 else published / denominator
-
-    Until you do, the dashboard guards the NotImplementedError and shows "—".
+    Decisions made here:
+      * Denominator is *terminal* posts only — published + failed. This answers
+        "of the posts that actually finished, how many succeeded?", a stable
+        reliability number that isn't dragged down by work still in the queue.
+      * NEEDS_RECONNECT is excluded: it's paused awaiting user action, not a
+        system failure, so counting it would unfairly punish the rate.
+      * An empty (zero-terminal) account returns None so the UI shows "—".
     """
-    raise NotImplementedError("Implement success_rate() — see the docstring.")
+    published = counts.get(S.PUBLISHED, 0)
+    denominator = published + counts.get(S.FAILED, 0)
+    return None if denominator == 0 else published / denominator

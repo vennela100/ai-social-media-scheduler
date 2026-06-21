@@ -47,10 +47,18 @@ RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
+# Where the Next.js SPA is served. Used to (a) trust its origin for CSRF and
+# (b) bounce OAuth callbacks back to it. The SPA proxies /api/* to Django, so
+# the browser only ever talks to this origin.
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
+
 # CSRF needs full origins (scheme + host) for any non-localhost form posts.
 CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
 ]
+# The SPA origin posts to /api/* through its proxy — trust it for CSRF.
+CSRF_TRUSTED_ORIGINS += [FRONTEND_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"]
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))  # de-dup, keep order
 if RENDER_EXTERNAL_HOSTNAME:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
 
@@ -105,6 +113,24 @@ LINKEDIN_CLIENT_SECRET = os.environ.get("LINKEDIN_CLIENT_SECRET", "")
 # notify_failure() no-ops cleanly while these are blank.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# --- Email notifications ---
+# SMTP credentials for outbound alert emails (publish success / failure /
+# skipped / token-expiry). For Gmail, EMAIL_HOST_USER is your address and
+# EMAIL_HOST_PASSWORD is a 16-char App Password (NOT your login password).
+# Leaving EMAIL_HOST_USER blank makes the notifier no-op cleanly — same graceful
+# degradation as the Telegram alerts above, so the publish job never crashes.
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+# Where alerts are delivered. Falls back to the sender address if unset.
+NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "") or EMAIL_HOST_USER
+# Absolute base URL used inside emails. The publish job (GitHub Actions) has no
+# HTTP request to derive a URL from, so it reads this. e.g. https://app.onrender.com
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:8000")
 
 
 # --- Applications ---

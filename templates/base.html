@@ -4,26 +4,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Creator Studio — AI Scheduler{% endblock %}</title>
+  <title>{% block title %}Cadence — AI Scheduler{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v=editorial-light-11">
 </head>
 <body>
 {% if user.is_authenticated %}
   <div class="app">
     <aside class="sidebar">
       <a href="{% url 'core:dashboard' %}" class="brand">
-        <span class="logo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
-        </span>
-        <span class="meta"><b>Creator Studio</b><span>AI Scheduler</span></span>
+        <span class="wordmark">cadence<span class="dot">.</span></span>
+        <span class="brand-sub">AI Scheduler</span>
       </a>
 
       <nav class="nav">
         <div class="nav-label">Workspace</div>
-        {% url 'core:dashboard' as u_dash %}{% url 'core:upload' as u_up %}{% url 'core:connections' as u_conn %}
+        {% url 'core:dashboard' as u_dash %}{% url 'core:upload' as u_up %}{% url 'core:storage' as u_storage %}{% url 'core:connections' as u_conn %}
         <a href="{{ u_dash }}" class="{% if request.path == u_dash %}active{% endif %}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
           <span>Dashboard</span>
@@ -31,6 +29,10 @@
         <a href="{{ u_up }}" class="{% if request.path == u_up %}active{% endif %}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           <span>Upload</span>
+        </a>
+        <a href="{{ u_storage }}" class="{% if request.path == u_storage %}active{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+          <span>Storage</span>
         </a>
         <div class="nav-label">Channels</div>
         <a href="{{ u_conn }}" class="{% if request.path == u_conn %}active{% endif %}">
@@ -99,6 +101,34 @@
       document.cookie = "tz=" + tz + "; path=/; max-age=31536000; samesite=Lax";
       if (!had) location.reload();
     } catch (e) { /* leave dates in UTC */ }
+  })();
+</script>
+<script>
+  // Global submit feedback: the clicked button shows a spinner + "working" label
+  // and disables, so Upload / Generate / Schedule never feel unresponsive while
+  // the server works. The page navigates on response, so no re-enable needed.
+  (function () {
+    document.addEventListener("submit", function (e) {
+      var form = e.target;
+      if (form.dataset.noLoading !== undefined) return;
+      var btn = (e.submitter) || form.querySelector('button[type="submit"], button:not([type])');
+      if (!btn || btn.dataset.loading) return;
+      // Skip forms a script cancelled (client-side validation, fetch handlers).
+      setTimeout(function () {
+        if (e.defaultPrevented) return;
+        btn.dataset.loading = "1";
+        btn.dataset.label = btn.innerHTML;
+        var word = btn.textContent.trim().toLowerCase();
+        var verb = word.indexOf("schedul") > -1 ? "Scheduling…"
+                 : word.indexOf("generat") > -1 || word.indexOf("add") > -1 ? "Generating…"
+                 : word.indexOf("clean") > -1 || word.indexOf("archive") > -1 || word.indexOf("delete") > -1 ? "Working…"
+                 : word.indexOf("refresh") > -1 ? "Refreshing…"
+                 : "Uploading…";
+        btn.innerHTML = '<span class="spinner" style="border-top-color:currentColor;"></span> ' + verb;
+        btn.disabled = true;
+        btn.style.opacity = "0.85";
+      }, 0);
+    }, true);
   })();
 </script>
 </body>

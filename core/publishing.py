@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from . import instagram, linkedin, storage, youtube
 from .models import ScheduledPost, SocialAccount, Video
-from .notifications import notify_failure
+from .notifications import notify_failure, notify_skipped, notify_success
 
 logger = logging.getLogger("scheduler")
 
@@ -126,6 +126,19 @@ def process_post(post: ScheduledPost) -> str:
     platform = post.social_account.platform
     publisher = PUBLISHERS.get(platform)
 
+    # Demo connections (created via the instant-connect button) hold no real
+    # OAuth token — there's nothing to post to. Rather than fail, mark the post
+    # "published" with a demo id so the schedule → publish flow completes
+    # visibly. Engagement stats stay null (never fabricated). Real connections
+    # (with a real token) fall through to the real publishers below.
+    if post.social_account.access_token == "demo":
+        post.status = Status.PUBLISHED
+        post.platform_post_id = f"demo-{post.id}"
+        post.last_error = ""
+        post.save(update_fields=["status", "platform_post_id", "last_error", "updated_at"])
+        logger.info("Post %s published (demo connection) to %s", post.id, platform)
+        return post.status
+
     if publisher is None:
         post.status = Status.FAILED
         post.last_error = f"No publisher registered for platform '{platform}'."
@@ -152,7 +165,7 @@ def process_post(post: ScheduledPost) -> str:
             status=SocialAccount.Status.NEEDS_RECONNECT
         )
         logger.warning("Post %s needs reconnect: %s", post.id, exc)
-        notify_failure(post)
+        notify_skipped(post)
         return post.status
     except Exception as exc:
         post.retry_count += 1
@@ -177,6 +190,7 @@ def process_post(post: ScheduledPost) -> str:
         post.last_error = ""
         post.save(update_fields=["status", "platform_post_id", "last_error", "updated_at"])
         logger.info("Post %s published to %s as %s", post.id, platform, platform_post_id)
+        notify_success(post)
         return post.status
 
 
@@ -204,7 +218,8 @@ def _archive_source(video: Video) -> bool:
     video.thumbnail_url = thumb["url"]
     video.thumbnail_public_id = thumb["public_id"]
     video.source_deleted = True
-    video.save(update_fields=["thumbnail_url", "thumbnail_public_id", "source_deleted"])
+    video.source_size_bytes = 0
+    video.save(update_fields=["thumbnail_url", "thumbnail_public_id", "source_deleted", "source_size_bytes"])
     logger.info("Archived source for video %s (kept thumbnail %s)", video.pk, thumb["public_id"])
     return True
 
@@ -263,6 +278,7 @@ def run(now=None) -> dict:
                 now.isoformat(timespec="seconds"), post.id, account.platform,
                 account.token_expires_at,
             )
+            notify_skipped(post)
             summary["needs_reconnect"] += 1
             continue
 

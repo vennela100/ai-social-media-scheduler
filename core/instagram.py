@@ -1,9 +1,9 @@
-"""
-Instagram (Instagram API with Instagram Login) OAuth + publishing — Phase 5.
+﻿"""
+Instagram (Instagram API with Instagram Login) OAuth + publishing â€” Phase 5.
 
 This uses Meta's NEWER "Instagram API with Instagram login" flow (not the older
-Facebook-Page-based Graph API). The user logs in with Instagram directly — no
-Facebook Page required — and we talk to graph.instagram.com.
+Facebook-Page-based Graph API). The user logs in with Instagram directly â€” no
+Facebook Page required â€” and we talk to graph.instagram.com.
 
 Auth:
   1. Send the user to instagram.com/oauth/authorize (Instagram app id + the
@@ -198,3 +198,54 @@ def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
     media_id = _check(pub, "media publish")["id"]
     logger.info("Published to Instagram: %s", media_id)
     return media_id
+
+
+# --- Analytics ---
+
+
+
+def fetch_stats(account: SocialAccount, media_id: str) -> dict | None:
+    """Return {"views","likes","comments"} for a published Reel, or None.
+
+    Likes and comments live on the media node. Views come from the insights edge.
+    Instagram has exposed Reel views under different metric names across API
+    versions, so try the current "views" metric before the older "plays".
+    """
+    if not media_id:
+        return None
+    token = account.access_token
+    try:
+        r = requests.get(
+            f"{GRAPH}/{media_id}",
+            params={"fields": "like_count,comments_count", "access_token": token},
+            timeout=30,
+        )
+        data = _check(r, "media stats")
+        stats = {
+            "views": None,
+            "likes": data.get("like_count"),
+            "comments": data.get("comments_count"),
+        }
+    except Exception as exc:
+        logger.warning("Instagram stats fetch failed for %s: %s", media_id, exc)
+        return None
+
+    for metric in ("views", "plays"):
+        try:
+            ins = requests.get(
+                f"{GRAPH}/{media_id}/insights",
+                params={"metric": metric, "access_token": token},
+                timeout=30,
+            )
+            if not ins.ok:
+                continue
+            for item in ins.json().get("data", []):
+                values = item.get("values") or []
+                if values and values[0].get("value") is not None:
+                    stats["views"] = values[0]["value"]
+                    break
+            if stats["views"] is not None:
+                break
+        except Exception as exc:
+            logger.debug("Instagram insights (%s) unavailable for %s: %s", metric, media_id, exc)
+    return stats

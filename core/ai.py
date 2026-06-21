@@ -94,13 +94,6 @@ IMAGE_RULE = (
     "video anywhere. Write as if the viewer is looking at a photo or graphic."
 )
 
-# Static reminder surfaced on the LinkedIn schedule card (links in the post body
-# suppress reach; put them in the first comment instead).
-LINKEDIN_FIRST_COMMENT_REMINDER = (
-    "Paste your video or image link in the first comment — never in the post body, "
-    "it kills reach by 50%."
-)
-
 
 def is_configured() -> bool:
     return bool(settings.GEMINI_API_KEY)
@@ -216,6 +209,44 @@ def cleanup_analysis(gfile) -> None:
         logger.debug("Could not delete Gemini file %s: %s", getattr(gfile, "name", "?"), exc)
 
 
+# Gemini intermittently returns 503 UNAVAILABLE ("this model is experiencing
+# high demand") — a transient, server-side overload, not a problem with our
+# request. Retry a few times with exponential backoff so a momentary spike
+# recovers automatically instead of surfacing to the user as a hard failure.
+GENERATE_MAX_ATTEMPTS = 3
+GENERATE_RETRY_BASE_DELAY = 1.5  # seconds; doubles each retry (1.5s, 3s, ...)
+
+
+def _is_transient_overload(exc) -> bool:
+    """True only for retryable Gemini overloads (503), not genuine failures.
+
+    A 503 means "try again later"; a bad API key, quota exhaustion (429), or an
+    unparseable response will not fix themselves on retry, so we don't waste time
+    looping on those — they fail fast and reach the user as an actionable error.
+    """
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code == 503:
+        return True
+    text = str(exc).lower()
+    return "503" in text or "unavailable" in text or "overloaded" in text or "high demand" in text
+
+
+def _generate_with_retry(client, **kwargs):
+    """Call generate_content, retrying transient overloads with backoff."""
+    for attempt in range(1, GENERATE_MAX_ATTEMPTS + 1):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as exc:
+            if attempt == GENERATE_MAX_ATTEMPTS or not _is_transient_overload(exc):
+                raise
+            delay = GENERATE_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            logger.warning(
+                "Gemini overloaded (attempt %d/%d), retrying in %.1fs: %s",
+                attempt, GENERATE_MAX_ATTEMPTS, delay, exc,
+            )
+            time.sleep(delay)
+
+
 def generate_metadata(platform: str, title: str = "", description: str = "", filename: str = "",
                       media_type: str = "video", category: str = "", video_file=None) -> dict:
     """
@@ -241,7 +272,8 @@ def generate_metadata(platform: str, title: str = "", description: str = "", fil
         media_type=media_type, category=category, analyzed=bool(video_file),
     )
     contents = [video_file, prompt] if video_file else prompt
-    response = client.models.generate_content(
+    response = _generate_with_retry(
+        client,
         model=GEMINI_MODEL,
         contents=contents,
         config=types.GenerateContentConfig(response_mime_type="application/json"),
@@ -266,6 +298,96 @@ def generate_metadata(platform: str, title: str = "", description: str = "", fil
         "hashtags": _format_tags(platform, tokens),
         "model": GEMINI_MODEL,
     }
+
+
+# Days of the week the model is allowed to return, so we can validate its output
+# and the front-end can map a name to a real calendar date.
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+_FALLBACK_POST_TIMES = {
+    "youtube": [
+        {"day": "Saturday", "time": "10:00", "reason": "Weekend viewers have longer watch sessions"},
+        {"day": "Wednesday", "time": "18:00", "reason": "Evening browsing after work or school"},
+        {"day": "Sunday", "time": "11:00", "reason": "Strong discovery window before the week starts"},
+    ],
+    "instagram": [
+        {"day": "Tuesday", "time": "19:00", "reason": "High evening Reels scrolling"},
+        {"day": "Thursday", "time": "20:00", "reason": "Strong save and share window"},
+        {"day": "Sunday", "time": "18:00", "reason": "Relaxed browsing before the week starts"},
+    ],
+    "linkedin": [
+        {"day": "Tuesday", "time": "09:00", "reason": "Workday feed check-in"},
+        {"day": "Wednesday", "time": "12:00", "reason": "Lunch break professional browsing"},
+        {"day": "Thursday", "time": "17:00", "reason": "End-of-day reflection window"},
+    ],
+}
+
+
+def fallback_post_times(platform: str, count: int = 3) -> list[dict]:
+    """Return built-in posting slots when Gemini is unavailable or rate-limited."""
+    rows = _FALLBACK_POST_TIMES.get(platform, _FALLBACK_POST_TIMES["instagram"])
+    return [dict(row) for row in rows[:count]]
+
+
+def suggest_post_times(platform: str, category: str = "", count: int = 3) -> list[dict]:
+    """Ask Gemini for the best times to post on a platform for a given niche.
+
+    Returns up to `count` slots like
+        {"day": "Tuesday", "time": "18:00", "reason": "Evening commute scroll"}
+    where time is 24-hour HH:MM in the audience's local time. Raises
+    ImproperlyConfigured if no GEMINI_API_KEY (caller surfaces it). Malformed
+    rows are dropped; an empty list is a valid (if unhelpful) result.
+    """
+    if platform not in PLATFORM_LIMITS:
+        raise ValueError(f"Unknown platform: {platform}")
+
+    from google.genai import types
+
+    client = _client()
+    niche = category.strip() or "general content"
+    prompt = (
+        f"You are a social media scheduling expert. For a {platform} creator in the "
+        f'"{niche}" niche, give the {count} best times to publish for maximum reach '
+        "and engagement, based on typical audience behavior for that platform and niche.\n\n"
+        "Use the audience's LOCAL time. Spread suggestions across different days.\n"
+        "Return JSON only, an array of objects:\n"
+        '{"slots": [{"day": "Tuesday", "time": "18:00", "reason": "short why"}]}\n'
+        "day must be a full weekday name; time must be 24-hour HH:MM; reason ≤ 70 chars."
+    )
+    response = _generate_with_retry(
+        client,
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+
+    try:
+        data = json.loads(response.text)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.error("Gemini returned non-JSON for suggest_post_times: %s", exc)
+        raise ValueError("AI response could not be parsed. Try again.") from exc
+
+    rows = data.get("slots", data) if isinstance(data, dict) else data
+    slots = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        day = str(row.get("day", "")).strip().capitalize()
+        time = str(row.get("time", "")).strip()
+        if day not in _WEEKDAYS or not re.match(r"^\d{1,2}:\d{2}$", time):
+            continue
+        hh, mm = (int(x) for x in time.split(":"))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            continue
+        slots.append({
+            "day": day,
+            "time": f"{hh:02d}:{mm:02d}",
+            "reason": str(row.get("reason", "")).strip()[:70],
+        })
+        if len(slots) >= count:
+            break
+    logger.info("Suggested %d post time(s) for %s/%s", len(slots), platform, niche)
+    return slots
 
 
 def validate_metadata(platform: str, title: str, description: str, hashtags: str) -> list[str]:

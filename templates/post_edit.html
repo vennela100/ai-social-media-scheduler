@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Edit scheduled post — Cadence{% endblock %}
+
+{% block content %}
+  <div class="page-head reveal">
+    <div>
+      <div class="eyebrow"><a href="{% url 'core:dashboard' %}" style="color:var(--text-faint);">← Dashboard</a></div>
+      <h1>Edit scheduled post</h1>
+      <p>{{ post.video }} → {{ post.social_account.get_platform_display }}</p>
+    </div>
+  </div>
+
+  <div class="card reveal" style="max-width:520px;">
+    <form method="post" action="{% url 'core:post_edit' post.pk %}" id="edit-form"
+          data-date="{{ local|date:'Y-m-d' }}" data-hour="{{ local|date:'g' }}"
+          data-minute="{{ local|date:'i' }}" data-ampm="{{ local|date:'A' }}"
+          data-visibility="{{ post.visibility }}">
+      {% csrf_token %}
+
+      {% if post.social_account.platform == "instagram" %}
+        <label class="fld-label">Visibility</label>
+        <input class="fld" type="text" value="Public (Instagram reels are always public)" disabled>
+        <input type="hidden" name="visibility" value="public">
+      {% elif post.social_account.platform == "linkedin" %}
+        <label class="fld-label">Visibility</label>
+        <select class="fld" name="visibility">
+          <option value="public">Public — anyone on LinkedIn</option>
+          <option value="private">Connections only</option>
+        </select>
+      {% else %}
+        <label class="fld-label">Visibility</label>
+        <select class="fld" name="visibility">
+          <option value="public">Public — anyone can watch</option>
+          <option value="unlisted">Unlisted — only people with the link</option>
+          <option value="private">Private — only you</option>
+        </select>
+      {% endif %}
+
+      <label class="fld-label">Publish at <span class="lim">{{ current_tz }}</span></label>
+      <div class="time-row">
+        <input class="fld" type="date" name="sched_date" required>
+        <select class="fld" name="sched_hour" required aria-label="Hour">
+          <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+          <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+          <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+          <option value="10">10</option><option value="11">11</option><option value="12">12</option>
+        </select>
+        <span class="time-colon">:</span>
+        <select class="fld" name="sched_minute" required aria-label="Minute">
+          <option value="00">00</option><option value="05">05</option><option value="10">10</option>
+          <option value="15">15</option><option value="20">20</option><option value="25">25</option>
+          <option value="30">30</option><option value="35">35</option><option value="40">40</option>
+          <option value="45">45</option><option value="50">50</option><option value="55">55</option>
+        </select>
+        <select class="fld" name="sched_ampm" required aria-label="AM or PM">
+          <option value="AM">AM</option><option value="PM">PM</option>
+        </select>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button class="btn btn-primary" type="submit">Save changes</button>
+        <a class="btn btn-ghost" href="{% url 'core:dashboard' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    (function () {
+      var f = document.getElementById("edit-form");
+      function set(name, val) {
+        var el = f.querySelector('[name="' + name + '"]');
+        if (el && val) el.value = val;
+      }
+      set("sched_date", f.dataset.date);
+      set("sched_hour", String(parseInt(f.dataset.hour, 10)));
+      set("sched_minute", f.dataset.minute);
+      set("sched_ampm", f.dataset.ampm);
+      var vis = f.querySelector('select[name="visibility"]');
+      if (vis && f.dataset.visibility) vis.value = f.dataset.visibility;
+    })();
+  </script>
+{% endblock %}

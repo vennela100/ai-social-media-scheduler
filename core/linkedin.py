@@ -37,6 +37,7 @@ TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 USERINFO_URL = "https://api.linkedin.com/v2/userinfo"
 ASSETS_URL = "https://api.linkedin.com/v2/assets"
 UGC_POSTS_URL = "https://api.linkedin.com/v2/ugcPosts"
+SOCIAL_ACTIONS_URL = "https://api.linkedin.com/v2/socialActions"
 
 # openid+profile let us read the member's person id via /userinfo;
 # w_member_social is what actually authorizes posting on their behalf.
@@ -224,3 +225,36 @@ def publish(account: SocialAccount, *, media_url: str, caption: str,
     post_urn = _create_share(account, asset_urn, caption, li_visibility, category)
     logger.info("Published to LinkedIn (%s, %s): %s", category, li_visibility, post_urn)
     return post_urn
+
+
+# --- Analytics ---
+
+def fetch_stats(account: SocialAccount, post_urn: str) -> dict | None:
+    """Return {"views","likes","comments"} for a member post, or None.
+
+    The v2 socialActions edge reports likes + comments for a share/ugcPost URN.
+    Member-post *view* counts aren't exposed on the self-serve surface, so views
+    is always None here. Never raises — analytics is non-fatal.
+    """
+    if not post_urn:
+        return None
+    try:
+        from urllib.parse import quote
+
+        r = requests.get(
+            f"{SOCIAL_ACTIONS_URL}/{quote(post_urn, safe='')}",
+            headers=_headers(account.access_token),
+            timeout=30,
+        )
+        if not r.ok:
+            logger.warning("LinkedIn stats %s: HTTP %s %s", post_urn, r.status_code, r.text[:200])
+            return None
+        data = r.json()
+        return {
+            "views": None,  # not available for member posts via this API
+            "likes": data.get("likesSummary", {}).get("totalLikes"),
+            "comments": data.get("commentsSummary", {}).get("totalComments"),
+        }
+    except Exception as exc:
+        logger.warning("LinkedIn stats fetch failed for %s: %s", post_urn, exc)
+        return None

@@ -1,4 +1,4 @@
-"""Core views.
+﻿"""Core views.
 
 Phase 1: a login-protected dashboard listing the user's videos, plus an upload
 flow (browser -> Cloudinary -> Video row). Real features build on this.
@@ -21,7 +21,7 @@ from django.utils.crypto import get_random_string
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-from . import ai, instagram, linkedin, publishing, stats, youtube
+from . import ai, analytics, instagram, linkedin, publishing, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -62,7 +62,7 @@ def dashboard(request):
         .select_related("video", "social_account")
     )
 
-    # One grouped query → {status: count}. Drives the headline stat cards and
+    # One grouped query â†’ {status: count}. Drives the headline stat cards and
     # the status breakdown strip below, instead of len() on the whole queryset.
     counts = {
         row["status"]: row["count"]
@@ -73,7 +73,7 @@ def dashboard(request):
     try:
         summary["success_rate"] = stats.success_rate(counts)
     except NotImplementedError:
-        # Learning-mode stub not implemented yet — show "—" rather than crash.
+        # Learning-mode stub not implemented yet â€” show "â€”" rather than crash.
         summary["success_rate"] = None
 
     # Per-status breakdown in the model's declared order, for the pills strip.
@@ -90,27 +90,7 @@ def dashboard(request):
     for p in posts:
         p.reconnect_url = _connect_url(p.social_account.platform)
 
-    # Cloudinary storage used (None if not configured / lookup failed).
-    usage = get_usage()
-    storage = None
-    if usage:
-        # Prefer an explicit storage-limit % if the plan has one; otherwise fall
-        # back to the credit usage % (the Free tier is credit-based, no byte cap).
-        percent = usage["credits_used_percent"]
-        if usage["storage_limit_bytes"]:
-            percent = max(percent or 0, usage["storage_bytes"] / usage["storage_limit_bytes"] * 100)
-        storage = {
-            "used": human_bytes(usage["storage_bytes"]),
-            "limit": human_bytes(usage["storage_limit_bytes"]) if usage["storage_limit_bytes"] else None,
-            "percent": percent,
-            "level": usage_level(percent),
-            "assets": usage["assets"],
-            "plan": usage["plan"],
-            # How many of this user's sources could be freed right now.
-            "cleanable": sum(
-                1 for v in videos if not v.source_deleted and v.cloudinary_public_id and v.is_fully_published()
-            ),
-        }
+    storage = _storage_summary(videos)
 
     return render(
         request,
@@ -127,15 +107,70 @@ def dashboard(request):
     )
 
 
+def _storage_summary(videos):
+    """Build account + current user's storage numbers for dashboard/storage UI."""
+    videos = list(videos)
+    usage = get_usage()
+    cleanable = [
+        v for v in videos
+        if not v.source_deleted and v.cloudinary_public_id and v.is_fully_published()
+    ]
+    user_active_bytes = sum(v.source_size_bytes or 0 for v in videos if not v.source_deleted)
+    storage = {
+        "user_active": human_bytes(user_active_bytes),
+        "user_active_bytes": user_active_bytes,
+        "cleanable": len(cleanable),
+        "cleanable_bytes": sum(v.source_size_bytes or 0 for v in cleanable),
+        "cleanable_label": human_bytes(sum(v.source_size_bytes or 0 for v in cleanable)),
+    }
+    if not usage:
+        return storage
+    percent = usage["credits_used_percent"]
+    if usage["storage_limit_bytes"]:
+        percent = max(percent or 0, usage["storage_bytes"] / usage["storage_limit_bytes"] * 100)
+    storage.update({
+        "used": human_bytes(usage["storage_bytes"]),
+        "limit": human_bytes(usage["storage_limit_bytes"]) if usage["storage_limit_bytes"] else None,
+        "percent": percent,
+        "level": usage_level(percent),
+        "assets": usage["assets"],
+        "plan": usage["plan"],
+    })
+    return storage
+
+
+@login_required
+def storage(request):
+    """Per-user storage management: inspect active sources and clean safely."""
+    videos = list(
+        Video.objects.filter(user=request.user)
+        .prefetch_related("scheduled_posts", "ai_contents")
+    )
+    for video in videos:
+        video.can_archive_source = (
+            not video.source_deleted
+            and bool(video.cloudinary_public_id)
+            and video.is_fully_published()
+        )
+    return render(
+        request,
+        "storage.html",
+        {
+            "videos": videos,
+            "storage": _storage_summary(videos),
+        },
+    )
+
+
 # Severity order for stacking expiry banners (most urgent first).
 _BANNER_ORDER = {"expired": 0, "urgent": 1, "warning": 2}
 
 
 def _token_health(request):
-    """Build expiry banners for the dashboard and fire throttled Telegram alerts.
+    """Build expiry banners for the dashboard and fire throttled email reminders.
 
     Returns a list of banner dicts (worst first). Auto-refresh platforms (YouTube)
-    only surface when their refresh token is actually revoked. Telegram reminders
+    only surface when their refresh token is actually revoked. Email reminders
     go out at most once per 24h per account.
     """
     accounts = list(SocialAccount.objects.filter(user=request.user))
@@ -146,7 +181,7 @@ def _token_health(request):
     for acc in accounts:
         level = acc.health_level()
         if level not in _BANNER_ORDER:
-            continue  # good / auto — nothing to show
+            continue  # good / auto â€” nothing to show
         banners.append({
             "platform": acc.platform,
             "name": acc.get_platform_display(),
@@ -154,7 +189,7 @@ def _token_health(request):
             "days": acc.days_until_expiry(),
             "connect_url": _connect_url(acc.platform),
         })
-        # Throttled Telegram reminder (skip auto-refresh platforms entirely).
+        # Throttled email reminder (skip auto-refresh platforms entirely).
         if not acc.auto_refreshes() and (
             acc.last_reminder_sent_at is None or acc.last_reminder_sent_at < reminder_cutoff
         ):
@@ -195,7 +230,7 @@ def upload(request):
             try:
                 result = upload_media(form.cleaned_data["video"], media_type=media_type)
             except ImproperlyConfigured as exc:
-                # Cloudinary key not set yet — tell the user plainly, don't 500.
+                # Cloudinary key not set yet â€” tell the user plainly, don't 500.
                 messages.error(request, f"Upload service not ready: {exc}")
                 return render(request, "upload.html", _upload_context(form))
             except Exception as exc:  # network / Cloudinary error
@@ -209,6 +244,7 @@ def upload(request):
                 file_url=result["file_url"],
                 thumbnail_url=result["thumbnail_url"],
                 original_filename=result["original_filename"],
+                source_size_bytes=getattr(form.cleaned_data["video"], "size", 0) or 0,
                 cloudinary_public_id=result.get("public_id", ""),
                 user_title=form.cleaned_data["title"],
                 user_description=form.cleaned_data["description"],
@@ -220,7 +256,7 @@ def upload(request):
             if platforms:
                 messages.success(
                     request,
-                    f"Uploaded. Generating content for {len(platforms)} platform(s) — "
+                    f"Uploaded. Generating content for {len(platforms)} platform(s) â€” "
                     "review, edit, and schedule below.",
                 )
             else:
@@ -274,7 +310,6 @@ def video_detail(request, pk):
             "ai_ready": ai.is_configured(),
             "has_description": bool(video.user_description.strip()),
             "current_tz": timezone.get_current_timezone_name(),
-            "linkedin_first_comment": ai.LINKEDIN_FIRST_COMMENT_REMINDER,
         },
     )
 
@@ -284,8 +319,8 @@ def video_detail(request, pk):
 def generate_ai(request, pk):
     """Generate (or regenerate) one draft from the video's title + description.
 
-    Returns JSON so the review page can fire these in parallel — one per
-    platform — each updating its own card when it resolves.
+    Returns JSON so the review page can fire these in parallel â€” one per
+    platform â€” each updating its own card when it resolves.
     """
     content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
     video = content.video
@@ -293,7 +328,7 @@ def generate_ai(request, pk):
     # We persist with QuerySet.update() (a pure UPDATE) instead of content.save().
     # save() falls back to an INSERT if the row vanished mid-request (e.g. the
     # user deleted the video while it was generating), which then trips the FK.
-    # update() just touches 0 rows in that case — no crash.
+    # update() just touches 0 rows in that case â€” no crash.
     rows = AIContent.objects.filter(pk=content.pk)
 
     if not ai.is_configured():
@@ -311,11 +346,11 @@ def generate_ai(request, pk):
             media_type=video.media_type,
             category=video.category,
         )
-    except Exception as exc:  # SDK / network / parse — isolate to this platform
+    except Exception as exc:  # SDK / network / parse â€” isolate to this platform
         logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
         rows.update(generation_status=AIContent.GenStatus.FAILED)
         return JsonResponse(
-            {"ok": False, "error": "Generation failed — tap regenerate to retry."}, status=200
+            {"ok": False, "error": "Generation failed â€” tap regenerate to retry."}, status=200
         )
 
     rows.update(
@@ -326,7 +361,7 @@ def generate_ai(request, pk):
         generation_status=AIContent.GenStatus.DONE,
     )
 
-    # Nudge the user to describe the video when they didn't — better output next time.
+    # Nudge the user to describe the video when they didn't â€” better output next time.
     notice = "" if video.user_description.strip() else "For better results, describe your video above."
     return JsonResponse(
         {
@@ -371,7 +406,7 @@ def storage_cleanup(request):
     """Archive the user's fully-published video sources right now to free space.
 
     Same archive the scheduler does on a 7-day delay, but on demand and ignoring
-    the retention window — for when the user hits the "storage full" warning and
+    the retention window â€” for when the user hits the "storage full" warning and
     wants space back immediately. Keeps each video's thumbnail.
     """
     eligible = [
@@ -389,10 +424,94 @@ def storage_cleanup(request):
     else:
         messages.info(
             request,
-            "Nothing to clean up yet — only videos whose posts have all published "
+            "Nothing to clean up yet â€” only videos whose posts have all published "
             "can be archived.",
         )
-    return redirect("core:dashboard")
+    return redirect("core:storage")
+
+
+def _purge_user_videos(user):
+    """Delete ALL of `user`'s videos and their Cloudinary assets, ignoring publish
+    status. Returns {"deleted": int, "failed": int, "freed_bytes": int}.
+
+    DECISION POINT (learning mode): when a single video's Cloudinary delete fails
+    (network hiccup, asset already gone, auth blip), do you still delete its DB row?
+
+      • Delete the row anyway  -> the list clears completely and space is "freed" in
+        the app's eyes, but the orphaned Cloudinary file may linger and keep costing
+        storage (you've lost its public_id, so you can't easily retry).
+      • Keep the row on failure -> no orphans; the user can re-run "Delete all" to
+        retry, but the list won't fully empty in one click.
+
+    Iterate `Video.objects.filter(user=user)`. For each, try delete_media() on the
+    source (video.cloudinary_public_id, media_type=video.media_type) and, if present,
+    the thumbnail (video.thumbnail_public_id, media_type="image") — mirror how
+    video_delete() does it. Tally results and return the counts above.
+    """
+    # TODO(you): implement the purge loop + your chosen failure policy (≈8-10 lines).
+    raise NotImplementedError
+
+
+@require_POST
+@login_required
+def storage_delete_all(request):
+    """Delete every uploaded video for this user, regardless of publish status.
+
+    The nuclear option behind the conservative storage_cleanup: when the user just
+    wants ALL their source files and Cloudinary assets gone to reclaim space. The
+    template guards this with a typed/double confirmation since it's irreversible.
+    """
+    try:
+        result = _purge_user_videos(request.user)
+    except NotImplementedError:
+        messages.error(
+            request,
+            "Delete-all isn't finished yet (the purge step is a pending learning-mode "
+            "contribution). Nothing was deleted.",
+        )
+        return redirect("core:storage")
+
+    deleted, failed = result["deleted"], result["failed"]
+    if not deleted and not failed:
+        messages.info(request, "Nothing to delete — you have no uploads.")
+    elif failed:
+        messages.warning(
+            request,
+            f"Deleted {deleted} video{'s' if deleted != 1 else ''}, but {failed} "
+            f"couldn't be fully removed from storage. Try again to retry those.",
+        )
+    else:
+        freed = human_bytes(result.get("freed_bytes", 0))
+        messages.success(
+            request,
+            f"Deleted all {deleted} video{'s' if deleted != 1 else ''} and freed {freed}. "
+            "This also removed their drafts and scheduled posts.",
+        )
+    return redirect("core:storage")
+
+
+@require_POST
+@login_required
+def video_archive_source(request, pk):
+    """Archive one fully-published source file, keeping its thumbnail/history."""
+    video = get_object_or_404(Video, pk=pk, user=request.user)
+    if video.source_deleted:
+        messages.info(request, "That source file is already archived.")
+        return redirect("core:storage")
+    if not video.cloudinary_public_id:
+        messages.info(request, "This upload has no source file to archive.")
+        return redirect("core:storage")
+    if not video.is_fully_published():
+        messages.error(
+            request,
+            "This source is still needed. Archive is available after all posts for it are published.",
+        )
+        return redirect("core:storage")
+    if publishing._archive_source(video):
+        messages.success(request, f"Archived {video} and kept its thumbnail.")
+    else:
+        messages.error(request, "Could not archive that source file. Try again later.")
+    return redirect("core:storage")
 
 
 def _parse_local_datetime(raw):
@@ -443,9 +562,26 @@ def _final_caption(content):
 
 
 # Which platforms can actually publish a still image today. YouTube is video-only;
-# our Instagram publisher only does video Reels — so images go to LinkedIn alone.
+# our Instagram publisher only does video Reels â€” so images go to LinkedIn alone.
 # (Decision point: widen this once an Instagram image-post path exists.)
 IMAGE_PLATFORMS = {"linkedin"}
+
+
+def _normalize_visibility(platform: str, raw):
+    """Clamp a requested visibility to what the platform can actually honour.
+
+    Instagram reels are always public; LinkedIn only offers PUBLIC or CONNECTIONS
+    (so "unlisted" collapses to privateâ†’CONNECTIONS); an unknown value falls back
+    to PUBLIC. Keeps the stored row, dashboard, and publisher in agreement and
+    stops a tampered form from saving a bogus value.
+    """
+    V = ScheduledPost.Visibility
+    visibility = raw if raw in V.values else V.PUBLIC
+    if platform == "instagram":
+        return V.PUBLIC
+    if platform == "linkedin" and visibility == V.UNLISTED:
+        return V.PRIVATE
+    return visibility
 
 
 @login_required
@@ -455,7 +591,7 @@ def schedule_content(request, pk):
     if request.method != "POST":
         return redirect("core:video_detail", pk=content.video.pk)
 
-    # The source file is archived after publishing — there's nothing left to post.
+    # The source file is archived after publishing â€” there's nothing left to post.
     if content.video.source_deleted:
         messages.error(
             request,
@@ -467,7 +603,7 @@ def schedule_content(request, pk):
     if content.video.media_type == "image" and content.platform not in IMAGE_PLATFORMS:
         messages.error(
             request,
-            f"{content.get_platform_display()} can't post a still image — images can "
+            f"{content.get_platform_display()} can't post a still image â€” images can "
             f"only go to {', '.join(p.title() for p in IMAGE_PLATFORMS)} right now.",
         )
         return redirect("core:video_detail", pk=content.video.pk)
@@ -508,19 +644,8 @@ def schedule_content(request, pk):
             messages.error(request, v)
         return redirect("core:video_detail", pk=content.video.pk)
 
-    # Visibility the user chose, then normalized to what the platform can ACTUALLY
-    # do — so the stored row, dashboard, and toast never claim something the
-    # publisher won't honour (and a tampered form can't store a bogus value):
-    #   Instagram → always public (reels can't be private)
-    #   LinkedIn  → only PUBLIC or CONNECTIONS, so "unlisted" collapses to private
-    V = ScheduledPost.Visibility
-    visibility = request.POST.get("visibility", V.PUBLIC)
-    if visibility not in V.values:
-        visibility = V.PUBLIC
-    if content.platform == "instagram":
-        visibility = V.PUBLIC
-    elif content.platform == "linkedin" and visibility == V.UNLISTED:
-        visibility = V.PRIVATE
+    # Visibility the user chose, clamped to what the platform can actually honour.
+    visibility = _normalize_visibility(content.platform, request.POST.get("visibility"))
 
     post = ScheduledPost.objects.create(
         video=content.video,
@@ -534,7 +659,214 @@ def schedule_content(request, pk):
     messages.success(
         request,
         f"Scheduled to {content.get_platform_display()} ({post.get_visibility_display()}) "
-        f"for {when:%b %d, %Y · %H:%M} UTC.",
+        f"for {when:%b %d, %Y Â· %H:%M} UTC.",
+    )
+    return redirect("core:dashboard")
+
+
+@require_POST
+@login_required
+def schedule_all(request, pk):
+    """Schedule every ready draft of a video to one shared time (one click).
+
+    Skips drafts still generating, platforms not connected, and image drafts on
+    platforms that can't post images. Each gets the platform's default (public)
+    visibility — use the per-draft form for finer control.
+    """
+    video = get_object_or_404(Video, pk=pk, user=request.user)
+    if video.source_deleted:
+        messages.error(request, "This video's source was archived. Re-upload it to post again.")
+        return redirect("core:video_detail", pk=video.pk)
+
+    when = _parse_schedule_time(request)
+    if when is None:
+        messages.error(request, "Pick a valid date and time.")
+        return redirect("core:video_detail", pk=video.pk)
+    if when <= timezone.now():
+        messages.error(request, "Pick a time in the future.")
+        return redirect("core:video_detail", pk=video.pk)
+
+    scheduled, skipped = [], []
+    for content in video.ai_contents.all():
+        name = content.get_platform_display()
+        if content.generation_status != AIContent.GenStatus.DONE:
+            skipped.append(f"{name} (still drafting)")
+            continue
+        if video.media_type == "image" and content.platform not in IMAGE_PLATFORMS:
+            skipped.append(f"{name} (no image support)")
+            continue
+        account = SocialAccount.objects.filter(user=request.user, platform=content.platform).first()
+        if not account:
+            skipped.append(f"{name} (not connected)")
+            continue
+        if ai.validate_metadata(content.platform, content.generated_title,
+                                content.generated_description, content.generated_hashtags):
+            skipped.append(f"{name} (needs edits)")
+            continue
+        ScheduledPost.objects.create(
+            video=video, social_account=account, ai_content=content,
+            final_caption=_final_caption(content), scheduled_time_utc=when,
+            visibility=_normalize_visibility(content.platform, "public"),
+            status=ScheduledPost.Status.PENDING,
+        )
+        scheduled.append(name)
+
+    if scheduled:
+        messages.success(
+            request,
+            f"Scheduled {len(scheduled)} post{'s' if len(scheduled) != 1 else ''} "
+            f"({', '.join(scheduled)}) for {when:%b %d, %Y · %H:%M} UTC."
+            + (f" Skipped: {', '.join(skipped)}." if skipped else "")
+        )
+        return redirect("core:dashboard")
+    messages.error(request, "Nothing scheduled. " + (", ".join(skipped) if skipped else "No ready drafts."))
+    return redirect("core:video_detail", pk=video.pk)
+
+
+@require_POST
+@login_required
+def suggest_times(request, pk):
+    """JSON: AI-suggested best posting slots for this draft's platform + niche.
+
+    Returns 200 with {"ok": False, "error": ...} on any problem (not a 4xx/5xx)
+    so the review-page JS can always parse the body and show a message inline,
+    matching the generate_ai contract.
+    """
+    content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
+    if not ai.is_configured():
+        return JsonResponse({
+            "ok": True,
+            "slots": ai.fallback_post_times(content.platform),
+            "notice": "Using standard best-time suggestions because Gemini is not configured.",
+        })
+    try:
+        slots = ai.suggest_post_times(content.platform, category=content.video.category)
+    except Exception as exc:
+        logger.warning("suggest_times failed for ai %s: %s", pk, exc)
+        return JsonResponse({
+            "ok": True,
+            "slots": ai.fallback_post_times(content.platform),
+            "notice": "Using standard best-time suggestions because Gemini is temporarily unavailable.",
+        })
+    return JsonResponse({"ok": True, "slots": slots})
+
+
+@require_POST
+@login_required
+def refresh_stats(request):
+    """Pull fresh views/likes/comments for the user's published posts, then return."""
+    result = analytics.refresh_for_user(request.user, force=True)
+    n = result["updated"]
+    if n:
+        messages.success(request, f"Updated stats for {n} post{'s' if n != 1 else ''}.")
+    else:
+        messages.info(request, "No new stats â€” already up to date (or none published yet).")
+    return redirect("core:dashboard")
+
+
+@require_POST
+@login_required
+def post_refresh_stats(request, pk):
+    """Pull fresh engagement for one published post from the dashboard row."""
+    post = get_object_or_404(
+        ScheduledPost.objects.select_related("social_account", "video"),
+        pk=pk,
+        video__user=request.user,
+    )
+
+    if post.status != ScheduledPost.Status.PUBLISHED:
+        messages.error(request, "Only published posts have stats to refresh.")
+        return redirect("core:dashboard")
+    if not post.platform_post_id:
+        messages.error(request, "This post has no platform id yet, so stats cannot be refreshed.")
+        return redirect("core:dashboard")
+
+    if post.social_account.access_token == "demo":
+        messages.info(
+            request,
+            f"{post.social_account.get_platform_display()} is a demo connection — live "
+            "engagement isn't available. Connect the real account to pull stats.",
+        )
+        return redirect("core:dashboard")
+
+    if analytics.refresh_post(post, force=True):
+        post.refresh_from_db(fields=["stat_views", "stat_likes", "stat_comments", "stats_updated_at"])
+        bits = []
+        if post.stat_views is not None:
+            bits.append(f"{post.stat_views} views")
+        if post.stat_likes is not None:
+            bits.append(f"{post.stat_likes} likes")
+        if post.stat_comments is not None:
+            bits.append(f"{post.stat_comments} comments")
+        detail = ", ".join(bits) if bits else "no metrics reported"
+        messages.success(request, f"Updated {post.social_account.get_platform_display()} stats: {detail}.")
+    else:
+        messages.error(
+            request,
+            f"Could not refresh {post.social_account.get_platform_display()} stats. "
+            "Reconnect the account or try again later.",
+        )
+    return redirect("core:dashboard")
+
+
+@require_POST
+@login_required
+def post_cancel(request, pk):
+    """Cancel (delete) a not-yet-published scheduled post."""
+    post = ScheduledPost.objects.filter(pk=pk, video__user=request.user).first()
+    if post is None:
+        messages.info(request, "That scheduled post is already gone.")
+        return redirect("core:dashboard")
+    if not post.is_editable():
+        messages.error(
+            request,
+            "This post can't be cancelled â€” it's already publishing or published.",
+        )
+        return redirect("core:dashboard")
+    platform = post.social_account.get_platform_display()
+    post.delete()
+    messages.success(request, f"Cancelled the {platform} post.")
+    return redirect("core:dashboard")
+
+
+@login_required
+def post_edit(request, pk):
+    """Edit a pending post's publish time and visibility before it goes out."""
+    post = get_object_or_404(ScheduledPost, pk=pk, video__user=request.user)
+    if not post.is_editable():
+        messages.error(request, "This post can't be edited â€” it's already publishing or published.")
+        return redirect("core:dashboard")
+
+    if request.method != "POST":
+        return render(request, "post_edit.html", {
+            "post": post,
+            "current_tz": timezone.get_current_timezone_name(),
+            # Pre-fill the time controls with the existing time in the viewer's tz.
+            "local": timezone.localtime(post.scheduled_time_utc),
+        })
+
+    when = _parse_schedule_time(request)
+    if when is None:
+        messages.error(request, "Pick a valid date and time.")
+        return redirect("core:post_edit", pk=pk)
+    if when <= timezone.now():
+        messages.error(request, "Pick a time in the future.")
+        return redirect("core:post_edit", pk=pk)
+
+    visibility = _normalize_visibility(post.social_account.platform, request.POST.get("visibility"))
+    post.scheduled_time_utc = when
+    post.visibility = visibility
+    # A failed/paused post the user reschedules should queue again from scratch.
+    if post.status != ScheduledPost.Status.PENDING:
+        post.status = ScheduledPost.Status.PENDING
+        post.retry_count = 0
+        post.last_error = ""
+    post.save(update_fields=[
+        "scheduled_time_utc", "visibility", "status", "retry_count", "last_error", "updated_at",
+    ])
+    messages.success(
+        request,
+        f"Updated â€” now scheduled for {when:%b %d, %Y Â· %H:%M} UTC ({post.get_visibility_display()}).",
     )
     return redirect("core:dashboard")
 
@@ -617,7 +949,7 @@ def _after_connect(request, account):
 
     name = account.get_platform_display()
     if account.auto_refreshes():
-        msg = f"{name} reconnected successfully. Auto-refreshed — no action needed."
+        msg = f"{name} reconnected successfully. Auto-refreshed â€” no action needed."
     elif account.token_expires_at:
         msg = f"{name} reconnected successfully. Token valid until {account.token_expires_at:%b %d, %Y}."
     else:
@@ -682,12 +1014,39 @@ def youtube_callback(request):
     return redirect("core:connections")
 
 
+def _disconnect_account(request, platform):
+    """Disconnect a platform WITHOUT losing its scheduled posts.
+
+    Deleting the SocialAccount would cascade-delete every ScheduledPost tied to
+    it. Instead we clear the tokens, mark the account needs-reconnect, and pause
+    its still-pending posts — so they survive and resume on reconnect (see
+    _after_connect, which flips needs_reconnect posts back to pending).
+    """
+    acc = SocialAccount.objects.filter(user=request.user, platform=platform).first()
+    if not acc:
+        return
+    paused = ScheduledPost.objects.filter(
+        social_account=acc,
+        status__in=[ScheduledPost.Status.PENDING, ScheduledPost.Status.PROCESSING],
+    ).update(
+        status=ScheduledPost.Status.NEEDS_RECONNECT,
+        last_error="Account disconnected — reconnect to resume.",
+    )
+    acc.access_token = ""
+    acc.refresh_token = ""
+    acc.status = SocialAccount.Status.NEEDS_RECONNECT
+    acc.save(update_fields=["access_token", "refresh_token", "status"])
+    msg = f"{acc.get_platform_display()} disconnected."
+    if paused:
+        msg += f" {paused} scheduled post{'s' if paused != 1 else ''} paused — reconnect to resume."
+    messages.success(request, msg)
+
+
 @login_required
 def youtube_disconnect(request):
-    """Remove the stored YouTube connection."""
+    """Disconnect YouTube, keeping (pausing) its scheduled posts."""
     if request.method == "POST":
-        SocialAccount.objects.filter(user=request.user, platform="youtube").delete()
-        messages.success(request, "YouTube disconnected.")
+        _disconnect_account(request, "youtube")
     return redirect("core:connections")
 
 
@@ -717,7 +1076,7 @@ def instagram_callback(request):
         # Log which failure mode so a recurring mismatch is diagnosable: "missing"
         # = the session didn't carry the state over (cookie/duplicate-tab issue);
         # "mismatch" = a stale or replayed callback. We deliberately log neither the
-        # state values nor the session key — those are sensitive (session hijack).
+        # state values nor the session key â€” those are sensitive (session hijack).
         mode = "missing" if not expected else "mismatch"
         logger.warning("Instagram state check failed: mode=%s", mode)
         messages.error(request, "Instagram connection failed: state mismatch. Try again.")
@@ -740,10 +1099,9 @@ def instagram_callback(request):
 
 @login_required
 def instagram_disconnect(request):
-    """Remove the stored Instagram connection."""
+    """Disconnect Instagram, keeping (pausing) its scheduled posts."""
     if request.method == "POST":
-        SocialAccount.objects.filter(user=request.user, platform="instagram").delete()
-        messages.success(request, "Instagram disconnected.")
+        _disconnect_account(request, "instagram")
     return redirect("core:connections")
 
 
@@ -788,10 +1146,9 @@ def linkedin_callback(request):
 
 @login_required
 def linkedin_disconnect(request):
-    """Remove the stored LinkedIn connection."""
+    """Disconnect LinkedIn, keeping (pausing) its scheduled posts."""
     if request.method == "POST":
-        SocialAccount.objects.filter(user=request.user, platform="linkedin").delete()
-        messages.success(request, "LinkedIn disconnected.")
+        _disconnect_account(request, "linkedin")
     return redirect("core:connections")
 
 
