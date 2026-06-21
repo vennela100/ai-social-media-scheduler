@@ -7,7 +7,7 @@ tools roundup) so every dashboard state — published, scheduled, failed,
 needs-reconnect — is represented.
 
     python manage.py seed_demo
-    login: vennela / password
+    login: vennela@demo.com / password
 """
 
 import datetime as dt
@@ -20,7 +20,8 @@ from core.models import AIContent, ScheduledPost, SocialAccount, Video
 
 User = get_user_model()
 
-USERNAME = "vennela"
+# Email is the login id now (auth is email-based), so the demo account uses one.
+USERNAME = "vennela@demo.com"
 PASSWORD = "password"
 
 
@@ -33,12 +34,13 @@ def days(d):
 
 
 class Command(BaseCommand):
-    help = "Create/refresh the demo creator workspace (user: vennela / password)."
+    help = "Create/refresh the demo creator workspace (user: vennela@demo.com / password)."
 
     def handle(self, *args, **opts):
         user, created = User.objects.get_or_create(
-            username=USERNAME, defaults={"email": "vennela@example.com"}
+            username=USERNAME, defaults={"email": USERNAME}
         )
+        user.email = USERNAME
         user.set_password(PASSWORD)
         user.save()
 
