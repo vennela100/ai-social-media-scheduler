@@ -11,7 +11,6 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import UserCreationForm
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.db.models import Count
@@ -27,6 +26,7 @@ from . import ai, analytics, instagram, linkedin, publishing, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
+    SignupForm,
     VideoUploadForm,
     media_type_for,
 )
@@ -60,13 +60,13 @@ def signup(request):
     if request.user.is_authenticated:
         return redirect("core:dashboard")
     if request.method == "POST":
-        form = UserCreationForm(request.POST)
+        form = SignupForm(request.POST)
         if form.is_valid():
             user = form.save()
             auth_login(request, user)
             return redirect("core:dashboard")
     else:
-        form = UserCreationForm()
+        form = SignupForm()
     return render(request, "registration/signup.html", {"form": form})
 
 

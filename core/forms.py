@@ -1,8 +1,28 @@
 """Forms for the core app."""
 
 from django import forms
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.models import User
 
 from .models import AIContent, Platform
+
+
+class SignupForm(UserCreationForm):
+    """Account creation with a required email, so publish alerts can reach the
+    user (each account gets its own notifications at its own address)."""
+
+    email = forms.EmailField(required=True, help_text="For publish success/failure alerts.")
+
+    class Meta(UserCreationForm.Meta):
+        model = User
+        fields = ("username", "email")
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.email = self.cleaned_data["email"]
+        if commit:
+            user.save()
+        return user
 
 # --- Upload limits (decision point — tune to your needs) ---
 # Separate caps per media type: video is large, images are small. Extensions are

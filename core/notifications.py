@@ -31,14 +31,16 @@ logger = logging.getLogger("scheduler")
 _RULE = "━━━━━━━━━━━━━━━━━━━━━━━━"
 
 
-def _send_email(subject: str, body: str, *, context: str) -> bool:
+def _send_email(subject: str, body: str, *, context: str, recipient: str = "") -> bool:
     """Send one alert email. No-op (logged) if unconfigured; never raises.
 
+    `recipient` is the target address (the post/account owner's email); it falls
+    back to the global NOTIFY_EMAIL when blank, so single-user setups still work.
     Returns True only if the message actually went out — callers use that to
     decide whether to record that a reminder was delivered.
     """
     sender = settings.EMAIL_HOST_USER
-    recipient = settings.NOTIFY_EMAIL
+    recipient = recipient or settings.NOTIFY_EMAIL
     if not sender or not recipient:
         logger.warning("%s: email not configured; skipping alert", context)
         return False
@@ -64,6 +66,12 @@ def _post_title(post) -> str:
     return video.user_title or video.original_filename or f"Post {post.id}"
 
 
+def _owner_email(post) -> str:
+    """The email of the user who owns this post (so multi-user alerts go to the
+    right inbox). Blank if the account has none — _send_email then falls back."""
+    return (getattr(post.video.user, "email", "") or "").strip()
+
+
 def notify_success(post) -> bool:
     """Tell the user a ScheduledPost published successfully. Returns True if sent."""
     platform = _platform_name(post)
@@ -80,7 +88,7 @@ def notify_success(post) -> bool:
     )
     return _send_email(
         f"✅ Your {platform} post is live!", body,
-        context=f"notify_success[post {post.id}]",
+        context=f"notify_success[post {post.id}]", recipient=_owner_email(post),
     )
 
 
@@ -103,7 +111,7 @@ def notify_failure(post) -> bool:
     )
     return _send_email(
         f"❌ Your {platform} post failed to publish", body,
-        context=f"notify_failure[post {post.id}]",
+        context=f"notify_failure[post {post.id}]", recipient=_owner_email(post),
     )
 
 
@@ -130,7 +138,7 @@ def notify_skipped(post) -> bool:
     )
     return _send_email(
         f"⚠️ Your {platform} post was skipped — reconnect needed", body,
-        context=f"notify_skipped[post {post.id}]",
+        context=f"notify_skipped[post {post.id}]", recipient=_owner_email(post),
     )
 
 
@@ -173,4 +181,5 @@ def notify_token_expiry(account, dashboard_url: str) -> bool:
     )
     return _send_email(
         subject, body, context=f"notify_token_expiry[{account.platform}]",
+        recipient=(getattr(account.user, "email", "") or "").strip(),
     )
