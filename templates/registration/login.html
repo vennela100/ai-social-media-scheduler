@@ -18,6 +18,8 @@
       {{ form.as_p }}
       <button class="btn btn-primary" type="submit" style="width:100%;justify-content:center;margin-top:6px;">Sign in</button>
     </form>
-    <p class="helptext" style="text-align:center;margin-top:18px;">Single-user app · accounts via <code>createsuperuser</code></p>
+    <p class="helptext" style="text-align:center;margin-top:18px;">
+      New here? <a href="{% url 'signup' %}">Create an account</a>
+    </p>
   </div>
 {% endblock %}
