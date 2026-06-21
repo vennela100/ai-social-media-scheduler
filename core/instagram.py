@@ -197,7 +197,31 @@ def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
     )
     media_id = _check(pub, "media publish")["id"]
     logger.info("Published to Instagram: %s", media_id)
-    return media_id
+
+    # The id media_publish returns is not always the one the media/insights
+    # endpoints accept (they 400 with "object does not exist"). The queryable
+    # node id is the newest item on the account's media edge — resolve to it so
+    # stats work later. Fall back to the publish id if the lookup fails.
+    return _resolve_media_id(ig_user_id, token, fallback=media_id)
+
+
+def _resolve_media_id(ig_user_id: str, token: str, *, fallback: str) -> str:
+    """Return the newest media node id (the one stats endpoints accept)."""
+    try:
+        resp = requests.get(
+            f"{GRAPH}/{ig_user_id}/media",
+            params={"fields": "id", "limit": 1, "access_token": token},
+            timeout=30,
+        )
+        items = _check(resp, "resolve media id").get("data", [])
+        if items:
+            resolved = items[0]["id"]
+            if resolved != fallback:
+                logger.info("Instagram media id resolved %s -> %s", fallback, resolved)
+            return resolved
+    except Exception as exc:  # never let stats-id resolution break a publish
+        logger.warning("Instagram media id resolve failed (%s); using %s", exc, fallback)
+    return fallback
 
 
 # --- Analytics ---
