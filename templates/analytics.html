@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Analytics — Cadence{% endblock %}
+
+{% block content %}
+<div class="page-head reveal">
+  <h1>Analytics</h1>
+  <form method="post" action="{% url 'core:refresh_stats' %}" style="margin:0;">{% csrf_token %}
+    <button class="btn btn-ghost btn-sm" type="submit">Refresh all stats</button>
+  </form>
+</div>
+
+{% if cards %}
+  <div class="an-grid reveal">
+    {% for c in cards %}
+      <div class="an-card glass">
+        <div class="an-head">
+          <span class="plat-ico {{ c.post.social_account.platform }}">{% include "partials/platform_icon.html" with platform=c.post.social_account.platform %}</span>
+          <strong>{{ c.post.video }}</strong>
+        </div>
+        <svg class="an-spark" viewBox="0 0 240 44" preserveAspectRatio="none">
+          <polyline points="{{ c.spark }}" fill="none" stroke="currentColor" stroke-width="2" />
+        </svg>
+        <div class="an-metrics">
+          <span title="Views">&#128065; {{ c.latest.views|default_if_none:"–" }}</span>
+          <span title="Likes">&hearts; {{ c.latest.likes|default_if_none:"–" }}</span>
+          <span title="Comments">&#128172; {{ c.latest.comments|default_if_none:"–" }}</span>
+        </div>
+        <div class="an-foot sub">
+          peak {{ c.peak_views }} views · {{ c.snaps|length }} reading{{ c.snaps|length|pluralize }} · updated {{ c.latest.captured_at|timesince }} ago
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty reveal">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+    <p>No analytics yet. Stats appear once a published post is refreshed at least once — the auto-refresh runs on each scheduler tick, or hit <b>Refresh all stats</b> above.</p>
+  </div>
+{% endif %}
+{% endblock %}

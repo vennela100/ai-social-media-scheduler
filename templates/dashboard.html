@@ -119,6 +119,9 @@
                       {% if p.status == "needs_reconnect" %}
                         <span class="pill failed" title="Token expired">Paused</span>
                         <a class="reconnect-link" href="{{ p.reconnect_url }}">Reconnect</a>
+                      {% elif p.status == "failed" %}
+                        <span class="pill failed" title="{{ p.last_error|default:'Publish failed' }}">Failed</span>
+                        <form method="post" action="{% url 'core:post_retry' p.pk %}" style="margin:0;">{% csrf_token %}<button class="btn btn-ghost btn-sm" type="submit">Retry</button></form>
                       {% else %}
                         <span class="pill {{ p.status }}">{{ p.get_status_display }}</span>
                       {% endif %}

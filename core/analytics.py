@@ -20,7 +20,7 @@ import logging
 from django.utils import timezone
 
 from . import instagram, linkedin, youtube
-from .models import ScheduledPost
+from .models import ScheduledPost, StatSnapshot
 
 logger = logging.getLogger("scheduler")
 
@@ -69,6 +69,10 @@ def refresh_post(post: ScheduledPost, *, force: bool = False, now=None) -> bool:
     post.stat_comments = stats.get("comments")
     post.stats_updated_at = now
     post.save(update_fields=["stat_views", "stat_likes", "stat_comments", "stats_updated_at"])
+    # Append a history point so the analytics page can chart growth over time.
+    StatSnapshot.objects.create(
+        post=post, views=post.stat_views, likes=post.stat_likes, comments=post.stat_comments
+    )
     logger.info("Refreshed stats for post %s (%s): %s", post.id, post.social_account.platform, stats)
     return True
 

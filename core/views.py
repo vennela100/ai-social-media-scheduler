@@ -124,6 +124,103 @@ def dashboard(request):
     )
 
 
+@login_required
+def calendar_view(request):
+    """Month grid of this user's scheduled + published posts."""
+    import calendar as _cal
+
+    today = timezone.localtime(timezone.now())
+    try:
+        year = int(request.GET.get("year", today.year))
+        month = int(request.GET.get("month", today.month))
+    except (TypeError, ValueError):
+        year, month = today.year, today.month
+    if not (1 <= month <= 12):
+        year, month = today.year, today.month
+
+    posts = (
+        ScheduledPost.objects.filter(
+            video__user=request.user,
+            scheduled_time_utc__year=year,
+            scheduled_time_utc__month=month,
+        )
+        .select_related("social_account", "video")
+        .order_by("scheduled_time_utc")
+    )
+    by_day: dict[int, list] = {}
+    for p in posts:
+        day = timezone.localtime(p.scheduled_time_utc).day
+        by_day.setdefault(day, []).append(p)
+
+    cal = _cal.Calendar(firstweekday=6)  # weeks start Sunday
+    weeks = []
+    for week in cal.monthdayscalendar(year, month):
+        weeks.append([
+            {"day": d, "posts": by_day.get(d, []),
+             "today": d == today.day and month == today.month and year == today.year}
+            if d else None
+            for d in week
+        ])
+
+    prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
+    return render(request, "calendar.html", {
+        "weeks": weeks,
+        "month_name": _cal.month_name[month],
+        "year": year, "month": month,
+        "prev_y": prev_y, "prev_m": prev_m,
+        "next_y": next_y, "next_m": next_m,
+        "weekday_labels": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    })
+
+
+@login_required
+def analytics_view(request):
+    """Engagement over time — per-post stat history charts."""
+    posts = (
+        ScheduledPost.objects.filter(
+            video__user=request.user,
+            status=ScheduledPost.Status.PUBLISHED,
+        )
+        .select_related("social_account", "video")
+        .prefetch_related("stat_snapshots")
+        .order_by("-scheduled_time_utc")
+    )
+    cards = []
+    for p in posts:
+        snaps = list(p.stat_snapshots.all())
+        if not snaps:
+            continue
+        views = [s.views or 0 for s in snaps]
+        # Build an SVG sparkline path for views over time.
+        spark = _sparkline([s.views or 0 for s in snaps])
+        cards.append({
+            "post": p,
+            "snaps": snaps,
+            "latest": snaps[-1],
+            "peak_views": max(views) if views else 0,
+            "spark": spark,
+        })
+    return render(request, "analytics.html", {"cards": cards})
+
+
+def _sparkline(values, *, width=240, height=44):
+    """Return an SVG polyline points string for a list of numbers."""
+    if not values:
+        return ""
+    if len(values) == 1:
+        values = values * 2
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1
+    n = len(values)
+    pts = []
+    for i, v in enumerate(values):
+        x = round(i / (n - 1) * width, 1)
+        y = round(height - (v - lo) / span * height, 1)
+        pts.append(f"{x},{y}")
+    return " ".join(pts)
+
+
 def _storage_summary(videos):
     """Build account + current user's storage numbers for dashboard/storage UI."""
     videos = list(videos)
@@ -846,6 +943,38 @@ def post_cancel(request, pk):
     return redirect("core:dashboard")
 
 
+@require_POST
+@login_required
+def post_retry(request, pk):
+    """Requeue a failed (or needs-reconnect) post to publish on the next tick."""
+    post = get_object_or_404(
+        ScheduledPost.objects.select_related("social_account"),
+        pk=pk,
+        video__user=request.user,
+    )
+    retryable = (ScheduledPost.Status.FAILED, ScheduledPost.Status.NEEDS_RECONNECT)
+    if post.status not in retryable:
+        messages.error(request, "Only failed posts can be retried.")
+        return redirect("core:dashboard")
+    if post.social_account.is_expired():
+        messages.error(
+            request,
+            f"Reconnect {post.social_account.get_platform_display()} first — its "
+            "access has expired.",
+        )
+        return redirect("core:connections")
+    post.status = ScheduledPost.Status.PENDING
+    post.retry_count = 0
+    post.last_error = ""
+    post.scheduled_time_utc = timezone.now()  # due immediately
+    post.save(update_fields=["status", "retry_count", "last_error", "scheduled_time_utc", "updated_at"])
+    messages.success(
+        request,
+        f"{post.social_account.get_platform_display()} post requeued — it'll publish shortly.",
+    )
+    return redirect("core:dashboard")
+
+
 @login_required
 def post_edit(request, pk):
     """Edit a pending post's publish time and visibility before it goes out."""
@@ -1193,4 +1322,7 @@ def run_publisher(request):
     if not expected or provided != expected:
         return JsonResponse({"status": "forbidden"}, status=403)
     summary = publishing.run()
-    return JsonResponse({"status": "ok", "summary": summary})
+    # Also pull fresh engagement stats so the dashboard stays current without
+    # anyone clicking Refresh. Only re-fetches posts past their staleness window.
+    stats_result = analytics.refresh_all()
+    return JsonResponse({"status": "ok", "summary": summary, "stats": stats_result})

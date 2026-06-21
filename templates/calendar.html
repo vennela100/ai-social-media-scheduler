@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Calendar — Cadence{% endblock %}
+
+{% block content %}
+<div class="page-head reveal">
+  <h1>Calendar</h1>
+  <div class="cal-nav">
+    <a class="btn btn-ghost btn-sm" href="?year={{ prev_y }}&month={{ prev_m }}">&larr;</a>
+    <span class="cal-title">{{ month_name }} {{ year }}</span>
+    <a class="btn btn-ghost btn-sm" href="?year={{ next_y }}&month={{ next_m }}">&rarr;</a>
+  </div>
+</div>
+
+<div class="cal-grid reveal">
+  {% for label in weekday_labels %}
+    <div class="cal-dow">{{ label }}</div>
+  {% endfor %}
+  {% for week in weeks %}
+    {% for cell in week %}
+      {% if cell %}
+        <div class="cal-cell{% if cell.today %} today{% endif %}">
+          <span class="cal-day">{{ cell.day }}</span>
+          {% for p in cell.posts %}
+            <a class="cal-post {{ p.status }}" href="{% url 'core:video_detail' p.video.pk %}"
+               title="{{ p.social_account.get_platform_display }} · {{ p.get_status_display }} · {{ p.scheduled_time_utc|date:'H:i' }}">
+              <span class="plat-ico {{ p.social_account.platform }}">{% include "partials/platform_icon.html" with platform=p.social_account.platform %}</span>
+              <span class="cal-post-t">{{ p.scheduled_time_utc|time:"H:i" }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="cal-cell empty"></div>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+</div>
+{% endblock %}

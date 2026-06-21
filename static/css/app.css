@@ -133,6 +133,36 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 }
 .user-chip .who { font-size: 13.5px; font-weight: 600; }
 .user-chip .who small { display: block; color: var(--text-faint); font-weight: 400; font-size: 11px; }
+.topbar { position: fixed; top: 16px; right: 22px; z-index: 50; display: flex; align-items: center; gap: 12px; }
+.topbar-user { font-size: 13px; font-weight: 600; color: var(--text-faint); }
+.topbar form { margin: 0; }
+.topbar .logout { background: var(--card, #fff); border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+
+/* ---------- Calendar ---------- */
+.cal-nav { display: flex; align-items: center; gap: 12px; }
+.cal-title { font-weight: 700; font-size: 15px; min-width: 150px; text-align: center; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-dow { text-align: center; font-size: 11px; font-weight: 700; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 0; }
+.cal-cell { min-height: 92px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; background: var(--card, #fff); display: flex; flex-direction: column; gap: 4px; }
+.cal-cell.empty { background: transparent; border-color: transparent; }
+.cal-cell.today { border-color: var(--accent, #6366f1); box-shadow: 0 0 0 1px var(--accent, #6366f1) inset; }
+.cal-day { font-size: 12px; font-weight: 700; color: var(--text-faint); }
+.cal-post { display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 5px; border-radius: 6px; background: var(--bg-soft, #f4f4f5); color: inherit; text-decoration: none; }
+.cal-post.published { background: var(--good-soft, #dcfce7); }
+.cal-post.failed, .cal-post.needs_reconnect { background: var(--bad-soft, #fee2e2); }
+.cal-post .plat-ico { width: 13px; height: 13px; }
+.cal-post-t { font-variant-numeric: tabular-nums; }
+
+/* ---------- Analytics ---------- */
+.an-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.an-card { padding: 16px; border-radius: 14px; display: flex; flex-direction: column; gap: 10px; }
+.an-head { display: flex; align-items: center; gap: 8px; }
+.an-head .plat-ico { width: 18px; height: 18px; }
+.an-head strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-spark { width: 100%; height: 44px; color: var(--accent, #6366f1); display: block; }
+.an-metrics { display: flex; gap: 16px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.an-foot { font-size: 11px; }
+
 .logout { background: none; border: none; cursor: pointer; color: var(--text-faint); margin-left: auto; padding: 6px 10px; border-radius: 8px; display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; transition: color 0.18s, background 0.18s; }
 .logout svg { width: 17px; height: 17px; }
 .logout:hover { color: var(--bad); background: var(--bad-soft); }

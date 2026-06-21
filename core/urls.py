@@ -9,6 +9,8 @@ app_name = "core"
 urlpatterns = [
     path("", views.home, name="home"),
     path("dashboard/", views.dashboard, name="dashboard"),
+    path("calendar/", views.calendar_view, name="calendar"),
+    path("analytics/", views.analytics_view, name="analytics"),
     path("storage/", views.storage, name="storage"),
     path("upload/", views.upload, name="upload"),
     path("video/<int:pk>/", views.video_detail, name="video_detail"),
@@ -25,6 +27,7 @@ urlpatterns = [
     # Scheduled-post management + analytics
     path("post/<int:pk>/edit/", views.post_edit, name="post_edit"),
     path("post/<int:pk>/cancel/", views.post_cancel, name="post_cancel"),
+    path("post/<int:pk>/retry/", views.post_retry, name="post_retry"),
     path("post/<int:pk>/refresh-stats/", views.post_refresh_stats, name="post_refresh_stats"),
     path("analytics/refresh/", views.refresh_stats, name="refresh_stats"),
     # Connections (OAuth)

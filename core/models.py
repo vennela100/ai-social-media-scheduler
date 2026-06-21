@@ -325,3 +325,27 @@ class ScheduledPost(models.Model):
         delay = min(base * (factor ** (attempts - 1)), cap)
         jitter = delay * 0.1
         return int(delay + random.uniform(-jitter, jitter))
+
+
+class StatSnapshot(models.Model):
+    """A point-in-time engagement reading for a published post.
+
+    One row is appended each time stats are refreshed, so the analytics page can
+    chart views/likes/comments growth over time (the ScheduledPost row only holds
+    the latest values).
+    """
+
+    post = models.ForeignKey(
+        ScheduledPost, on_delete=models.CASCADE, related_name="stat_snapshots"
+    )
+    views = models.PositiveIntegerField(null=True, blank=True)
+    likes = models.PositiveIntegerField(null=True, blank=True)
+    comments = models.PositiveIntegerField(null=True, blank=True)
+    captured_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["captured_at"]
+        indexes = [models.Index(fields=["post", "captured_at"])]
+
+    def __str__(self) -> str:
+        return f"snapshot post={self.post_id} views={self.views} @ {self.captured_at:%Y-%m-%d %H:%M}"
