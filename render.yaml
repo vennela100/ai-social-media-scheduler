@@ -7,7 +7,11 @@ services:
     runtime: python
     plan: free
     buildCommand: "./build.sh"
-    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT"
+    # --timeout 120: uploads stream through this process up to Cloudinary, which
+    # easily exceeds gunicorn's 30s default and gets the worker SIGKILLed (→ 500).
+    # --workers 2: keep the /healthz/ check answerable while one worker is busy
+    # on a slow upload, so Render doesn't mark the service unhealthy.
+    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --timeout 120 --workers 2"
     healthCheckPath: /healthz/
     envVars:
       - key: DJANGO_SECRET_KEY

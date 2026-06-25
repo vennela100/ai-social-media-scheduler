@@ -63,7 +63,10 @@ class EmailLoginForm(AuthenticationForm):
 # --- Upload limits (decision point — tune to your needs) ---
 # Separate caps per media type: video is large, images are small. Extensions are
 # an allowlist; Cloudinary's resource_type is the real backstop against fakes.
-VIDEO_MAX_MB = 500
+# Capped at 100 MB: the free Render instance has 512 MB RAM and streams the whole
+# file through itself to Cloudinary, so a larger cap invites OOM/timeout 500s.
+# (The real lift here is a direct browser→Cloudinary upload — see TODO.)
+VIDEO_MAX_MB = 100
 IMAGE_MAX_MB = 20
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
