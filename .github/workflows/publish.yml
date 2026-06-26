@@ -40,4 +40,15 @@ jobs:
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Email notifications. Without these the publish job runs fine but
+          # notify_success/failure/skipped silently no-op (no creds on the runner),
+          # which is why a post published with the PC off but sent no email.
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+          EMAIL_USE_TLS: ${{ secrets.EMAIL_USE_TLS }}
+          EMAIL_HOST_USER: ${{ secrets.EMAIL_HOST_USER }}
+          EMAIL_HOST_PASSWORD: ${{ secrets.EMAIL_HOST_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          # Used in the email body's "view dashboard" link (no request in cron).
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
         run: python manage.py publish_due_posts
