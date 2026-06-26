@@ -22,6 +22,9 @@ cloudinary>=1.41             # video upload -> public URLs Instagram's API needs
 # --- HTTP client (notifier now; Instagram/LinkedIn REST later) ---
 requests>=2.32
 
+# --- Email over HTTPS (Render free tier blocks outbound SMTP) ---
+django-anymail>=10.0         # Brevo backend: send alert emails via HTTPS API
+
 # --- Phase 2: AI metadata ---
 google-genai>=1.0            # Gemini 2.5 Flash metadata generation
 

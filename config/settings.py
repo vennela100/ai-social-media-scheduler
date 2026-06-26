@@ -131,11 +131,28 @@ EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+# Never let a blocked SMTP port hang a request: without this, Render's free tier
+# (which firewalls ports 25/465/587) makes socket.connect() block until gunicorn
+# SIGKILLs the worker. A short timeout turns that into a quick, caught exception.
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 # Where alerts are delivered. Falls back to the sender address if unset.
 NOTIFY_EMAIL = os.environ.get("NOTIFY_EMAIL", "") or EMAIL_HOST_USER
 # Absolute base URL used inside emails. The publish job (GitHub Actions) has no
 # HTTP request to derive a URL from, so it reads this. e.g. https://app.onrender.com
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:8000")
+
+# Production email over HTTPS (Render blocks outbound SMTP). When BREVO_API_KEY is
+# set we send through Brevo's HTTPS API via django-anymail instead of SMTP — same
+# send_mail() calls, different transport. Local dev leaves the key blank and keeps
+# using Gmail SMTP, which works fine off a normal network. The From address
+# (EMAIL_HOST_USER) must be a verified sender in the Brevo account.
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+if BREVO_API_KEY:
+    EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
+    ANYMAIL = {"BREVO_API_KEY": BREVO_API_KEY}
+DEFAULT_FROM_EMAIL = (
+    os.environ.get("DEFAULT_FROM_EMAIL", "") or EMAIL_HOST_USER or "no-reply@localhost"
+)
 
 
 # --- Applications ---
@@ -146,6 +163,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "anymail",   # HTTPS email backends (Brevo) for hosts that block SMTP
     "core",
 ]
 
