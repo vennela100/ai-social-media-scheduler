@@ -22,7 +22,7 @@ from django.utils.crypto import get_random_string
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 
-from . import ai, analytics, instagram, linkedin, publishing, stats, youtube
+from . import ai, analytics, instagram, linkedin, publishing, r2, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -330,41 +330,133 @@ def _create_pending_drafts(video, platforms):
         )
 
 
+@require_POST
+@login_required
+def upload_presign(request):
+    """Hand the browser a presigned URL so a video uploads DIRECTLY to R2.
+
+    The file never streams through this server (Render free tier: 512 MB RAM,
+    120 s requests), and R2 has no Cloudinary-style 100 MB video wall. JSON
+    contract like generate_ai: always 200, ok:false carries a user-facing error.
+    """
+    if not r2.is_configured():
+        return JsonResponse({"ok": False, "error": "Large-video storage isn't configured."})
+
+    filename = (request.POST.get("filename") or "").strip()
+    try:
+        size = int(request.POST.get("size") or 0)
+    except ValueError:
+        size = 0
+    if media_type_for(filename) != "video" or size <= 0:
+        return JsonResponse({"ok": False, "error": "Direct upload is for video files only."})
+    if size > r2.R2_VIDEO_MAX_MB * 1024 * 1024:
+        return JsonResponse(
+            {"ok": False,
+             "error": f"This video is {size / 1024 / 1024:.0f} MB; the limit is {r2.R2_VIDEO_MAX_MB} MB."}
+        )
+
+    key = r2.build_object_key(request.user.id, filename)
+    try:
+        upload_url = r2.presign_put(key, request.POST.get("content_type") or "video/mp4", size)
+    except Exception as exc:
+        logger.error("R2 presign failed: %s", exc)
+        return JsonResponse({"ok": False, "error": "Couldn't prepare the upload. Try again."})
+    return JsonResponse({"ok": True, "key": key, "upload_url": upload_url})
+
+
+def _create_r2_video(request, form):
+    """Video row for a file the browser already PUT into R2 (or None + it
+    flashed an error). The size we store is what R2 says landed — the client's
+    claim is only used for the presign signature."""
+    key = request.POST["r2_key"]
+    if not r2.key_belongs_to(key, request.user.id):
+        messages.error(request, "That upload doesn't match your account. Please retry.")
+        return None
+    size = r2.object_size(key)
+    if size is None:
+        messages.error(request, "The upload didn't reach storage. Please retry.")
+        return None
+
+    # Thumbnail: the page captures a frame client-side and sends it as a tiny
+    # JPEG; it lives on Cloudinary like every other image. Best-effort — a
+    # video without a preview image is annoying, not broken.
+    thumbnail_url, thumbnail_public_id = "", ""
+    thumb = request.FILES.get("thumb")
+    if thumb is not None:
+        try:
+            t = upload_media(thumb, media_type="image")
+            thumbnail_url, thumbnail_public_id = t["file_url"], t["public_id"]
+        except Exception as exc:
+            logger.warning("Thumbnail upload failed for R2 video: %s", exc)
+
+    try:
+        duration = int(float(request.POST.get("r2_duration") or 0))
+    except ValueError:
+        duration = 0
+
+    return Video.objects.create(
+        user=request.user,
+        media_type="video",
+        file_url=r2.public_url(key),
+        r2_object_key=key,
+        thumbnail_url=thumbnail_url,
+        thumbnail_public_id=thumbnail_public_id,
+        original_filename=(request.POST.get("r2_filename") or key.rsplit("/", 1)[-1])[:255],
+        source_size_bytes=size,
+        duration_seconds=max(duration, 0),
+        user_title=form.cleaned_data["title"],
+        user_description=form.cleaned_data["description"],
+        category=form.cleaned_data["category"],
+    )
+
+
 @login_required
 def upload(request):
     """Upload a video, then auto-draft content for each chosen platform.
 
-    Flow: validate -> Cloudinary -> Video row -> AI drafts per platform ->
-    land on the video's review page where the user edits and schedules.
+    Two paths in: images (and videos while R2 is unconfigured) arrive as a
+    normal multipart file and go to Cloudinary; large videos were already PUT
+    straight into R2 by the page's JS and arrive as just an `r2_key`. Both
+    end at the video's review page where drafts generate and get scheduled.
     """
     if request.method == "POST":
         form = VideoUploadForm(request.POST, request.FILES)
         if form.is_valid():
-            media_type = media_type_for(form.cleaned_data["video"].name) or "video"
-            try:
-                result = upload_media(form.cleaned_data["video"], media_type=media_type)
-            except ImproperlyConfigured as exc:
-                # Cloudinary key not set yet — tell the user plainly, don't 500.
-                messages.error(request, f"Upload service not ready: {exc}")
-                return render(request, "upload.html", _upload_context(form))
-            except Exception as exc:  # network / Cloudinary error
-                logger.error("Video upload failed: %s", exc)
-                messages.error(request, "Upload failed. Please try again.")
-                return render(request, "upload.html", _upload_context(form))
+            uploaded = form.cleaned_data["video"]
 
-            video = Video.objects.create(
-                user=request.user,
-                media_type=media_type,
-                file_url=result["file_url"],
-                thumbnail_url=result["thumbnail_url"],
-                original_filename=result["original_filename"],
-                source_size_bytes=getattr(form.cleaned_data["video"], "size", 0) or 0,
-                duration_seconds=result.get("duration", 0) or 0,
-                cloudinary_public_id=result.get("public_id", ""),
-                user_title=form.cleaned_data["title"],
-                user_description=form.cleaned_data["description"],
-                category=form.cleaned_data["category"],
-            )
+            if request.POST.get("r2_key"):
+                video = _create_r2_video(request, form)
+                if video is None:
+                    return render(request, "upload.html", _upload_context(form))
+            elif uploaded is None:
+                form.add_error("video", "Pick a video or image to upload.")
+                return render(request, "upload.html", _upload_context(form))
+            else:
+                media_type = media_type_for(uploaded.name) or "video"
+                try:
+                    result = upload_media(uploaded, media_type=media_type)
+                except ImproperlyConfigured as exc:
+                    # Cloudinary key not set yet — tell the user plainly, don't 500.
+                    messages.error(request, f"Upload service not ready: {exc}")
+                    return render(request, "upload.html", _upload_context(form))
+                except Exception as exc:  # network / Cloudinary error
+                    logger.error("Video upload failed: %s", exc)
+                    messages.error(request, "Upload failed. Please try again.")
+                    return render(request, "upload.html", _upload_context(form))
+
+                video = Video.objects.create(
+                    user=request.user,
+                    media_type=media_type,
+                    file_url=result["file_url"],
+                    thumbnail_url=result["thumbnail_url"],
+                    original_filename=result["original_filename"],
+                    source_size_bytes=getattr(uploaded, "size", 0) or 0,
+                    duration_seconds=result.get("duration", 0) or 0,
+                    cloudinary_public_id=result.get("public_id", ""),
+                    user_title=form.cleaned_data["title"],
+                    user_description=form.cleaned_data["description"],
+                    category=form.cleaned_data["category"],
+                )
 
             platforms = form.cleaned_data["platforms"]
             _create_pending_drafts(video, platforms)
@@ -388,6 +480,8 @@ def _upload_context(form):
         "form": form,
         "upload_ready": is_configured(),
         "ai_ready": ai.is_configured(),
+        "r2_ready": r2.is_configured(),
+        "r2_max_mb": r2.R2_VIDEO_MAX_MB,
     }
 
 
@@ -561,11 +655,13 @@ def video_delete(request, pk):
     try:
         # If the source was archived, this id is already gone (harmless no-op);
         # the live asset is the preserved thumbnail, deleted next.
+        if video.r2_object_key and not video.source_deleted:
+            r2.delete_object(video.r2_object_key)
         delete_media(video.cloudinary_public_id, media_type=video.media_type)
         if video.thumbnail_public_id:
             delete_media(video.thumbnail_public_id, media_type="image")
-    except Exception as exc:  # Cloudinary hiccup shouldn't block removing the row
-        logger.warning("Cloudinary delete failed for video %s: %s", video.pk, exc)
+    except Exception as exc:  # storage hiccup shouldn't block removing the row
+        logger.warning("Storage delete failed for video %s: %s", video.pk, exc)
     video.delete()
     messages.success(request, "Video deleted, along with its drafts and scheduled posts.")
     return redirect("core:dashboard")

@@ -87,8 +87,12 @@ def media_type_for(filename: str) -> str | None:
 class VideoUploadForm(forms.Form):
     """A video or image to push to Cloudinary, plus which platforms to draft for."""
 
+    # required=False: when Cloudflare R2 is configured, the page's JS uploads
+    # videos straight to R2 and submits an r2_key instead of the file (the view
+    # enforces that one of the two is present).
     video = forms.FileField(
         label="Video or image file",
+        required=False,
         help_text=f"Video ({', '.join(sorted(VIDEO_EXTENSIONS))}) up to {VIDEO_MAX_MB} MB · "
                   f"Image ({', '.join(sorted(IMAGE_EXTENSIONS))}) up to {IMAGE_MAX_MB} MB. "
                   f"Images can be posted to Instagram and LinkedIn (not YouTube).",
@@ -120,6 +124,8 @@ class VideoUploadForm(forms.Form):
 
     def clean_video(self):
         f = self.cleaned_data["video"]
+        if f is None:  # direct-to-R2 path — the view validates the r2_key instead
+            return None
 
         # Extension allowlist first, so we know which size cap to apply.
         media_type = media_type_for(f.name)

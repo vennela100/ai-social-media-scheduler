@@ -152,6 +152,10 @@ class Video(models.Model):
     # Cloudinary's public_id for this asset — kept so we can delete the remote
     # file when the user deletes the video (the URL alone is awkward to reverse).
     cloudinary_public_id = models.CharField(max_length=300, blank=True, default="")
+    # Set when the source lives in Cloudflare R2 instead of Cloudinary (large
+    # videos upload straight from the browser to R2 — see core/r2.py). Exactly
+    # one of cloudinary_public_id / r2_object_key identifies the source file.
+    r2_object_key = models.CharField(max_length=512, blank=True, default="")
     # Once every scheduled post for this video has published, the heavy source
     # file is redundant (the platforms host their own copies), so the scheduler
     # archives it: deletes the Cloudinary source, keeps only a small thumbnail.

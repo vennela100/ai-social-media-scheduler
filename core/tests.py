@@ -152,3 +152,126 @@ class ScheduledPostDashboardTests(TestCase):
         self.assertEqual(len(data["slots"]), 3)
         self.assertEqual(data["slots"][0]["day"], "Tuesday")
         self.assertIn("temporarily unavailable", data["notice"])
+
+
+R2_TEST_ENV = {
+    "R2_ACCOUNT_ID": "test-acct",
+    "R2_ACCESS_KEY_ID": "test-key",
+    "R2_SECRET_ACCESS_KEY": "test-secret",
+    "R2_BUCKET": "test-bucket",
+    "R2_PUBLIC_BASE_URL": "https://pub-test.r2.dev",
+}
+
+
+@override_settings(
+    ALLOWED_HOSTS=["testserver"],
+    TOKEN_ENCRYPTION_KEY=TEST_FERNET_KEY,
+    ROOT_URLCONF="config.urls",
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
+)
+class R2DirectUploadTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="creator", password="pass12345"
+        )
+        self.client.force_login(self.user)
+
+    def test_presign_says_unconfigured_without_env(self):
+        response = self.client.post(
+            reverse("core:upload_presign"),
+            {"filename": "big.mp4", "size": "1000", "content_type": "video/mp4"},
+        )
+        data = response.json()
+        self.assertFalse(data["ok"])
+        self.assertIn("isn't configured", data["error"])
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    @patch("core.r2.presign_put", return_value="https://signed.example/put")
+    def test_presign_returns_scoped_key_and_url(self, presign_put):
+        response = self.client.post(
+            reverse("core:upload_presign"),
+            {"filename": "my video!.mp4", "size": "1000", "content_type": "video/mp4"},
+        )
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["key"].startswith(f"videos/{self.user.id}/"))
+        self.assertTrue(data["key"].endswith(".mp4"))
+        self.assertEqual(data["upload_url"], "https://signed.example/put")
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    def test_presign_rejects_images_and_oversize(self):
+        for payload in (
+            {"filename": "cert.png", "size": "1000"},                       # not a video
+            {"filename": "huge.mp4", "size": str(3000 * 1024 * 1024)},      # over cap
+        ):
+            data = self.client.post(reverse("core:upload_presign"), payload).json()
+            self.assertFalse(data["ok"], payload)
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    @patch("core.r2.object_size", return_value=123456789)
+    def test_upload_with_r2_key_creates_video(self, object_size):
+        key = f"videos/{self.user.id}/abc123/long.mp4"
+        response = self.client.post(
+            reverse("core:upload"),
+            {"r2_key": key, "r2_filename": "long.mp4", "r2_duration": "725",
+             "title": "", "category": "", "description": ""},
+        )
+        video = Video.objects.get(user=self.user)
+        self.assertRedirects(
+            response, reverse("core:video_detail", args=[video.pk]),
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(video.r2_object_key, key)
+        self.assertEqual(video.file_url, f"https://pub-test.r2.dev/{key}")
+        self.assertEqual(video.source_size_bytes, 123456789)
+        self.assertEqual(video.duration_seconds, 725)
+        self.assertEqual(video.cloudinary_public_id, "")
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    @patch("core.r2.object_size", return_value=1000)
+    def test_upload_rejects_foreign_r2_key(self, object_size):
+        response = self.client.post(
+            reverse("core:upload"),
+            {"r2_key": "videos/99999/abc123/x.mp4", "r2_filename": "x.mp4",
+             "title": "", "category": "", "description": ""},
+        )
+        self.assertEqual(response.status_code, 200)  # re-rendered with an error
+        self.assertEqual(Video.objects.count(), 0)
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    @patch("core.views.delete_media")
+    @patch("core.r2.delete_object")
+    def test_delete_routes_r2_video_to_r2(self, delete_object, delete_media):
+        video = Video.objects.create(
+            user=self.user,
+            file_url="https://pub-test.r2.dev/videos/1/k/x.mp4",
+            r2_object_key=f"videos/{self.user.id}/k/x.mp4",
+            original_filename="x.mp4",
+        )
+        self.client.post(reverse("core:video_delete", args=[video.pk]))
+        delete_object.assert_called_once_with(video.r2_object_key)
+        self.assertEqual(Video.objects.count(), 0)
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    @patch("core.publishing.r2.delete_object")
+    def test_archive_deletes_r2_source_and_keeps_thumbnail(self, delete_object):
+        from core import publishing
+
+        video = Video.objects.create(
+            user=self.user,
+            file_url="https://pub-test.r2.dev/videos/1/k/x.mp4",
+            r2_object_key=f"videos/{self.user.id}/k/x.mp4",
+            thumbnail_url="https://res.cloudinary.com/thumb.jpg",
+            thumbnail_public_id="thumbs/abc",
+            original_filename="x.mp4",
+            source_size_bytes=500,
+        )
+        self.assertTrue(publishing._archive_source(video))
+        delete_object.assert_called_once_with(video.r2_object_key)
+        video.refresh_from_db()
+        self.assertTrue(video.source_deleted)
+        self.assertEqual(video.source_size_bytes, 0)
+        self.assertEqual(video.thumbnail_url, "https://res.cloudinary.com/thumb.jpg")

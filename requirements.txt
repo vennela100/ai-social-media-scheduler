@@ -17,7 +17,8 @@ gunicorn>=23.0               # WSGI server used by Render
 whitenoise>=6.8              # serves static files without a separate CDN
 
 # --- Phase 1: media storage ---
-cloudinary>=1.41             # video upload -> public URLs Instagram's API needs
+cloudinary>=1.41             # images + thumbnails -> public URLs Instagram's API needs
+boto3>=1.34                  # Cloudflare R2 (S3-compatible): large videos, direct browser upload
 
 # --- HTTP client (notifier now; Instagram/LinkedIn REST later) ---
 requests>=2.32

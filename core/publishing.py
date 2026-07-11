@@ -18,7 +18,7 @@ import re
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
-from . import instagram, linkedin, storage, youtube
+from . import instagram, linkedin, r2, storage, youtube
 from .models import ScheduledPost, SocialAccount, Video
 from .notifications import notify_failure, notify_skipped, notify_success
 
@@ -196,32 +196,40 @@ def process_post(post: ScheduledPost) -> str:
 
 
 def _archive_source(video: Video) -> bool:
-    """Delete a fully-published video's heavy Cloudinary source, keeping a thumb.
+    """Delete a fully-published video's heavy source file, keeping a thumbnail.
 
-    Preserves a small standalone thumbnail FIRST so the dashboard still shows a
-    preview; only deletes the source if that succeeds (so we never strand a video
-    with no image at all). Returns True if the source was archived.
+    Cloudinary sources: preserve a small standalone thumbnail FIRST so the
+    dashboard still shows a preview; only delete the source if that succeeds
+    (never strand a video with no image at all). R2 sources: the thumbnail is
+    already an independent Cloudinary image captured at upload, so just delete
+    the object. Returns True if the source was archived.
     """
-    if not video.cloudinary_public_id or video.source_deleted:
+    if video.source_deleted or not (video.cloudinary_public_id or video.r2_object_key):
         return False
 
-    thumb = storage.preserve_thumbnail(video.thumbnail_url)
-    if thumb is None:
-        logger.warning("Skipping archive of video %s: thumbnail preserve failed", video.pk)
-        return False
+    if video.r2_object_key:
+        try:
+            r2.delete_object(video.r2_object_key)
+        except Exception as exc:
+            logger.warning("Archive of video %s failed deleting R2 source: %s", video.pk, exc)
+            return False
+    else:
+        thumb = storage.preserve_thumbnail(video.thumbnail_url)
+        if thumb is None:
+            logger.warning("Skipping archive of video %s: thumbnail preserve failed", video.pk)
+            return False
+        try:
+            storage.delete_media(video.cloudinary_public_id, media_type=video.media_type)
+        except Exception as exc:
+            logger.warning("Archive of video %s failed deleting source: %s", video.pk, exc)
+            return False
+        video.thumbnail_url = thumb["url"]
+        video.thumbnail_public_id = thumb["public_id"]
 
-    try:
-        storage.delete_media(video.cloudinary_public_id, media_type=video.media_type)
-    except Exception as exc:
-        logger.warning("Archive of video %s failed deleting source: %s", video.pk, exc)
-        return False
-
-    video.thumbnail_url = thumb["url"]
-    video.thumbnail_public_id = thumb["public_id"]
     video.source_deleted = True
     video.source_size_bytes = 0
     video.save(update_fields=["thumbnail_url", "thumbnail_public_id", "source_deleted", "source_size_bytes"])
-    logger.info("Archived source for video %s (kept thumbnail %s)", video.pk, thumb["public_id"])
+    logger.info("Archived source for video %s", video.pk)
     return True
 
 
@@ -236,7 +244,7 @@ def cleanup_published_sources(now=None, retention_days: int = SOURCE_RETENTION_D
     cutoff = now - dt.timedelta(days=retention_days)
     candidates = Video.objects.filter(
         source_deleted=False, uploaded_at__lt=cutoff
-    ).exclude(cloudinary_public_id="")
+    ).exclude(cloudinary_public_id="", r2_object_key="")
 
     archived = 0
     for video in candidates:

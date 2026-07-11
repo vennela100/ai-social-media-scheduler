@@ -23,7 +23,9 @@
     </div>
   {% endif %}
 
-  <form method="post" enctype="multipart/form-data" class="uploader reveal">
+  <form method="post" enctype="multipart/form-data" class="uploader reveal" id="upload-form"
+        data-r2="{{ r2_ready|yesno:'1,0' }}" data-r2-max-mb="{{ r2_max_mb }}"
+        data-presign-url="{% url 'core:upload_presign' %}">
     {% csrf_token %}
 
     <!-- Left: drag-drop + live preview -->
@@ -37,7 +39,9 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
         </span>
         <span class="dz-title" id="dz-title">Drag a file here</span>
-        <span class="dz-sub">{{ form.video.help_text }}</span>
+        <span class="dz-sub">
+          {% if r2_ready %}Video up to {{ r2_max_mb }} MB (uploads straight to storage) · Image up to 20 MB.{% else %}{{ form.video.help_text }}{% endif %}
+        </span>
       </label>
       {{ form.video.errors }}
 
@@ -168,6 +172,121 @@
         });
         ["dragleave", "drop"].forEach(function (e) {
           dropzone.addEventListener(e, function () { dropzone.classList.remove("drag"); });
+        });
+      }
+
+      // --- Direct-to-R2 video upload ---
+      // With R2 configured, videos skip this server entirely: presign -> PUT the
+      // bytes straight to R2 (with real progress) -> submit only the metadata
+      // (plus a captured thumbnail frame). Images and the no-R2 case keep the
+      // classic multipart POST to Django/Cloudinary.
+      var form = document.getElementById("upload-form");
+      var r2Enabled = form && form.dataset.r2 === "1";
+      var submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+
+      function fail(msg) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Upload & generate";
+        alert(msg);
+      }
+
+      function setProgress(label) { submitBtn.textContent = label; }
+
+      // Grab one frame (~0.5s in) as a small JPEG for the dashboard thumbnail.
+      // Best-effort with a timeout: a video with no preview is annoying, not
+      // broken, so any failure resolves null and the upload continues.
+      function captureFrame(file) {
+        return new Promise(function (resolve) {
+          var done = false;
+          function finish(blob) { if (!done) { done = true; URL.revokeObjectURL(v.src); resolve(blob || null); } }
+          var v = document.createElement("video");
+          v.muted = true; v.playsInline = true; v.preload = "auto";
+          v.src = URL.createObjectURL(file);
+          v.addEventListener("loadeddata", function () { try { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); } catch (e) { finish(null); } });
+          v.addEventListener("seeked", function () {
+            try {
+              var scale = Math.min(1, 640 / (v.videoWidth || 640));
+              var c = document.createElement("canvas");
+              c.width = Math.round((v.videoWidth || 640) * scale);
+              c.height = Math.round((v.videoHeight || 360) * scale);
+              c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+              c.toBlob(finish, "image/jpeg", 0.75);
+            } catch (e) { finish(null); }
+          });
+          v.addEventListener("error", function () { finish(null); });
+          setTimeout(function () { finish(null); }, 4000);
+        });
+      }
+
+      function putToR2(url, file, contentType) {
+        return new Promise(function (resolve, reject) {
+          var xhr = new XMLHttpRequest();
+          xhr.open("PUT", url);
+          xhr.setRequestHeader("Content-Type", contentType);
+          xhr.upload.onprogress = function (e) {
+            if (e.lengthComputable) setProgress("Uploading… " + Math.round(e.loaded / e.total * 100) + "%");
+          };
+          xhr.onload = function () {
+            (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error("Storage rejected the upload (HTTP " + xhr.status + ")."));
+          };
+          xhr.onerror = function () { reject(new Error("Network error during upload.")); };
+          xhr.send(file);
+        });
+      }
+
+      function videoDuration(file) {
+        return new Promise(function (resolve) {
+          var v = document.createElement("video");
+          v.preload = "metadata";
+          v.src = URL.createObjectURL(file);
+          v.addEventListener("loadedmetadata", function () { var d = v.duration; URL.revokeObjectURL(v.src); resolve(isFinite(d) ? d : 0); });
+          v.addEventListener("error", function () { resolve(0); });
+          setTimeout(function () { resolve(0); }, 3000);
+        });
+      }
+
+      if (form && r2Enabled) {
+        form.addEventListener("submit", function (e) {
+          var file = fileInput.files && fileInput.files[0];
+          if (!file || kind(file.name) !== "video") return;   // images / no file: classic path
+          e.preventDefault();
+          if (file.size > parseInt(form.dataset.r2MaxMb, 10) * 1024 * 1024) {
+            return fail("This video is " + Math.round(file.size / 1024 / 1024) + " MB; the limit is " + form.dataset.r2MaxMb + " MB.");
+          }
+          submitBtn.disabled = true;
+          setProgress("Preparing…");
+          var contentType = file.type || "video/mp4";
+          var presignBody = new FormData();
+          presignBody.append("filename", file.name);
+          presignBody.append("size", file.size);
+          presignBody.append("content_type", contentType);
+          presignBody.append("csrfmiddlewaretoken", form.querySelector('[name="csrfmiddlewaretoken"]').value);
+
+          var key = null, duration = 0, thumbBlob = null;
+          Promise.all([captureFrame(file), videoDuration(file)])
+            .then(function (pre) {
+              thumbBlob = pre[0]; duration = pre[1];
+              return fetch(form.dataset.presignUrl, { method: "POST", body: presignBody });
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (!d.ok) throw new Error(d.error || "Couldn't prepare the upload.");
+              key = d.key;
+              return putToR2(d.upload_url, file, contentType);
+            })
+            .then(function () {
+              setProgress("Finishing…");
+              fileInput.disabled = true;                     // keep the bytes out of this POST
+              var body = new FormData(form);
+              fileInput.disabled = false;
+              body.append("r2_key", key);
+              body.append("r2_filename", file.name);
+              body.append("r2_duration", String(Math.round(duration)));
+              if (thumbBlob) body.append("thumb", thumbBlob, "thumb.jpg");
+              return fetch(form.action || window.location.href, { method: "POST", body: body });
+            })
+            .then(function (r) { window.location.assign(r.url); })
+            .catch(function (err) { fail(err.message || "Upload failed. Please try again."); });
         });
       }
     })();

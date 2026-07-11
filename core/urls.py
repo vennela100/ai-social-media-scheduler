@@ -13,6 +13,7 @@ urlpatterns = [
     path("analytics/", views.analytics_view, name="analytics"),
     path("storage/", views.storage, name="storage"),
     path("upload/", views.upload, name="upload"),
+    path("upload/presign/", views.upload_presign, name="upload_presign"),
     path("video/<int:pk>/", views.video_detail, name="video_detail"),
     path("video/<int:pk>/delete/", views.video_delete, name="video_delete"),
     path("storage/cleanup/", views.storage_cleanup, name="storage_cleanup"),
