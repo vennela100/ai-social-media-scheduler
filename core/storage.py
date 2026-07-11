@@ -104,6 +104,9 @@ def upload_media(file, *, media_type: str = "video", folder: str = CLOUDINARY_FO
         "thumbnail_url": thumbnail_url,
         "public_id": public_id,
         "original_filename": getattr(file, "name", "") or "",
+        # Cloudinary reports video length in seconds; absent for images. Kept so
+        # media analysis can cap by duration before downloading (see ai.py).
+        "duration": int(result.get("duration") or 0),
     }
 
 

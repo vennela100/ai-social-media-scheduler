@@ -30,6 +30,13 @@ VIDEO_DOWNLOAD_TIMEOUT = 120       # seconds to pull bytes from Cloudinary
 VIDEO_PROCESS_TIMEOUT = 90         # seconds to wait for Gemini to make it ACTIVE
 VIDEO_POLL_INTERVAL = 3            # seconds between state checks
 
+# Skip real media analysis for files bigger/longer than these — downloading a
+# huge clip and waiting on Gemini to process it risks OOM/timeouts on small
+# runners, so such videos degrade to text-only generation instead of crashing.
+# Env-overridable; set either to 0 to disable that particular check.
+MEDIA_ANALYSIS_MAX_BYTES = int(os.environ.get("MEDIA_ANALYSIS_MAX_BYTES", str(100 * 1024 * 1024)))
+MEDIA_ANALYSIS_MAX_SECONDS = int(os.environ.get("MEDIA_ANALYSIS_MAX_SECONDS", "300"))
+
 # Per-platform hard limits we generate within and validate against. These are
 # the public API/UX caps; tune if a platform changes them.
 PLATFORM_LIMITS = {
@@ -94,6 +101,20 @@ IMAGE_RULE = (
     "video anywhere. Write as if the viewer is looking at a photo or graphic."
 )
 
+# Prompt for the one-time, platform-agnostic media analysis. We want raw factual
+# observation here — NOT marketing copy — so the per-platform prompts can each
+# turn the same neutral facts into their own tuned title/description/hashtags.
+MEDIA_ANALYSIS_PROMPT = (
+    "You are a neutral media analyst. Describe factually and specifically what is "
+    "actually shown and heard in this {media}. Cover, where visible: the main "
+    "subjects and objects, the actions or events taking place, the setting or "
+    "location, the overall mood or tone, and any on-screen text or clearly spoken "
+    "words. Be concrete and grounded in what you can actually observe — do NOT "
+    "invent details, and do NOT add marketing language, hashtags, emojis, or "
+    "platform-specific phrasing. This is raw source material for later copywriting. "
+    "Return 4-8 sentences of plain prose, no headings or lists."
+)
+
 
 def is_configured() -> bool:
     return bool(settings.GEMINI_API_KEY)
@@ -111,9 +132,23 @@ def _client():
 
 
 def _build_prompt(platform: str, title: str, description: str, filename: str,
-                  media_type: str = "video", category: str = "", analyzed: bool = False) -> str:
-    # The user's description is the source of truth; title/filename fill gaps.
-    desc = description.strip() or f"infer the topic from the title/filename: {(title.strip() or filename) or 'unknown'}"
+                  media_type: str = "video", category: str = "", analyzed: bool = False,
+                  media_analysis: str = "") -> str:
+    # Grounding priority: what's actually in the media (analysis) + the creator's
+    # own note are the strongest signal; title, then filename, are only fallbacks.
+    analysis = (media_analysis or "").strip()
+    user_desc = description.strip()
+    if analysis and user_desc:
+        desc = (
+            f"What is actually in the {media_type} (from analysis of the file): {analysis}\n\n"
+            f"The creator's own note about it: {user_desc}"
+        )
+    elif analysis:
+        desc = f"What is actually in the {media_type} (from analysis of the file): {analysis}"
+    elif user_desc:
+        desc = user_desc
+    else:
+        desc = f"infer the topic from the title/filename: {(title.strip() or filename) or 'unknown'}"
     cat = category.strip() or "general"
     prompt = (
         PLATFORM_PROMPTS[platform]
@@ -248,14 +283,18 @@ def _generate_with_retry(client, **kwargs):
 
 
 def generate_metadata(platform: str, title: str = "", description: str = "", filename: str = "",
-                      media_type: str = "video", category: str = "", video_file=None) -> dict:
+                      media_type: str = "video", category: str = "", video_file=None,
+                      media_analysis: str = "") -> dict:
     """
-    Generate platform-specific metadata, driven by the user's description.
+    Generate platform-specific metadata, grounded in the real media when available.
 
-    `media_type` ("video"/"image") and `category` steer the reach-optimised
-    prompts; for images an extra rule forbids motion words. `filename`/`title`
-    are only fallbacks when the description is blank. If `video_file` (a Gemini
-    handle) is given, the model also watches the footage.
+    `media_analysis` is the one-time neutral description of what's actually in the
+    file (see analyze_media); when present it becomes the primary grounding context
+    alongside the creator's own `description`. `media_type` ("video"/"image") and
+    `category` steer the reach-optimised prompts; for images an extra rule forbids
+    motion words. `filename`/`title` are only fallbacks when both analysis and
+    description are blank. If `video_file` (a Gemini handle) is given, the model
+    also watches the footage inline.
 
     Returns {"title", "description", "hashtags", "model"} already trimmed to the
     platform's limits, where hashtags is one string (comma-separated tags for
@@ -270,6 +309,7 @@ def generate_metadata(platform: str, title: str = "", description: str = "", fil
     prompt = _build_prompt(
         platform, title, description, filename,
         media_type=media_type, category=category, analyzed=bool(video_file),
+        media_analysis=media_analysis,
     )
     contents = [video_file, prompt] if video_file else prompt
     response = _generate_with_retry(
@@ -298,6 +338,100 @@ def generate_metadata(platform: str, title: str = "", description: str = "", fil
         "hashtags": _format_tags(platform, tokens),
         "model": GEMINI_MODEL,
     }
+
+
+def _analyze_image(client, image_url: str) -> str:
+    """Fetch an image and ask Gemini to describe it inline (no Files API needed)."""
+    from google.genai import types
+
+    resp = requests.get(image_url, timeout=VIDEO_DOWNLOAD_TIMEOUT)
+    resp.raise_for_status()
+    mime = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+    if not mime.startswith("image/"):
+        mime = "image/jpeg"  # sensible default when Cloudinary omits the header
+    part = types.Part.from_bytes(data=resp.content, mime_type=mime)
+    response = _generate_with_retry(
+        client, model=GEMINI_MODEL,
+        contents=[part, MEDIA_ANALYSIS_PROMPT.format(media="image")],
+    )
+    return (response.text or "").strip()
+
+
+def _analyze_video(client, video_url: str) -> str:
+    """Upload a video to the Files API (polls until ACTIVE), describe it, clean up.
+
+    Returns "" if the upload/processing didn't complete — upload_for_analysis
+    already swallows its own errors and returns None, so we degrade quietly.
+    """
+    gfile = upload_for_analysis(video_url)
+    if gfile is None:
+        return ""
+    try:
+        response = _generate_with_retry(
+            client, model=GEMINI_MODEL,
+            contents=[gfile, MEDIA_ANALYSIS_PROMPT.format(media="video")],
+        )
+        return (response.text or "").strip()
+    finally:
+        cleanup_analysis(gfile)
+
+
+def analysis_skip_reason(video) -> str | None:
+    """Why this media should NOT be analyzed (too big/long), or None if it's fine.
+
+    Decided from the size/duration captured at upload, so we bail BEFORE spending
+    time downloading. A 0 cap disables that check; a 0/unknown value on the video
+    means "we don't know" and does not trip the cap.
+    """
+    size = getattr(video, "source_size_bytes", 0) or 0
+    if MEDIA_ANALYSIS_MAX_BYTES and size > MEDIA_ANALYSIS_MAX_BYTES:
+        return f"file is {size} bytes (over {MEDIA_ANALYSIS_MAX_BYTES}-byte cap)"
+    seconds = getattr(video, "duration_seconds", 0) or 0
+    if MEDIA_ANALYSIS_MAX_SECONDS and seconds > MEDIA_ANALYSIS_MAX_SECONDS:
+        return f"duration is {seconds}s (over {MEDIA_ANALYSIS_MAX_SECONDS}s cap)"
+    return None
+
+
+def analyze_media(video) -> str:
+    """Produce and cache ONE neutral, factual description of what's in the media.
+
+    Computed once from the real file and stored on Video.ai_media_analysis, then
+    reused as grounding context for every platform's generation. Idempotent:
+    returns the cached value if already present.
+
+    Best-effort by design — on any failure (download, upload, timeout, SDK) it
+    logs a warning and returns "", so callers fall straight back to text-only
+    generation and the user's request is never hard-failed.
+    """
+    existing = (getattr(video, "ai_media_analysis", "") or "").strip()
+    if existing:
+        return existing
+    if not is_configured() or not video.file_url:
+        return ""
+
+    try:
+        client = _client()
+        if video.media_type == "image":
+            text = _analyze_image(client, video.file_url)
+        else:
+            text = _analyze_video(client, video.file_url)
+    except Exception as exc:  # download / SDK / parse — degrade to text-only
+        logger.warning(
+            "Media analysis failed for video %s, using text only: %s",
+            getattr(video, "pk", "?"), exc,
+        )
+        return ""
+
+    text = (text or "").strip()
+    if text:
+        # Persist without touching other columns (a parallel generate request may
+        # be writing AIContent rows for the same video at the same moment).
+        from .models import Video
+
+        Video.objects.filter(pk=video.pk).update(ai_media_analysis=text)
+        video.ai_media_analysis = text  # keep the in-memory instance in sync
+        logger.info("Analyzed media for video %s (%d chars)", video.pk, len(text))
+    return text
 
 
 # Days of the week the model is allowed to return, so we can validate its output

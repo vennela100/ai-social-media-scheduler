@@ -128,6 +128,15 @@ class Video(models.Model):
         VIDEO = "video", "Video"
         IMAGE = "image", "Image"
 
+    class AnalysisStatus(models.TextChoices):
+        # Lifecycle of the one-time Gemini media analysis (see ai.analyze_media),
+        # driven off the request path by the analyze_pending_media cron so the web
+        # app never blocks on a slow download/upload.
+        PENDING = "pending", "Pending"    # uploaded, not yet analyzed
+        DONE = "done", "Done"             # ai_media_analysis is populated
+        SKIPPED = "skipped", "Skipped"    # too large/long, or nothing to analyze
+        FAILED = "failed", "Failed"       # analysis attempted and errored
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -156,6 +165,17 @@ class Video(models.Model):
     # A short topic/niche (e.g. "fitness", "tech tutorials") that steers the AI's
     # SEO/keyword choices. Fed into every Gemini prompt as `category`.
     category = models.CharField(max_length=100, blank=True, default="")
+    # One neutral, factual description of what is actually shown/heard in the media,
+    # produced by Gemini ONCE from the real file and reused as grounding context for
+    # every platform's generation. Blank until analyzed; generation falls back to
+    # text-only if analysis fails/times out, so this is always safe to be empty.
+    ai_media_analysis = models.TextField(blank=True, default="")
+    ai_analysis_status = models.CharField(
+        max_length=10, choices=AnalysisStatus.choices, default=AnalysisStatus.PENDING
+    )
+    # Video length in whole seconds (from Cloudinary); 0 for images or when unknown.
+    # Paired with source_size_bytes to cap what we send for analysis.
+    duration_seconds = models.PositiveIntegerField(default=0)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

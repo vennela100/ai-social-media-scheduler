@@ -359,6 +359,7 @@ def upload(request):
                 thumbnail_url=result["thumbnail_url"],
                 original_filename=result["original_filename"],
                 source_size_bytes=getattr(form.cleaned_data["video"], "size", 0) or 0,
+                duration_seconds=result.get("duration", 0) or 0,
                 cloudinary_public_id=result.get("public_id", ""),
                 user_title=form.cleaned_data["title"],
                 user_description=form.cleaned_data["description"],
@@ -453,6 +454,12 @@ def generate_ai(request, pk):
             {"ok": False, "error": "AI isn't configured (GEMINI_API_KEY)."}, status=200
         )
 
+    # Media analysis (the heavy download + Gemini processing) is done OFF the
+    # request path by the analyze_pending_media cron — doing it here would risk
+    # Render's request timeout on long videos. We simply reuse whatever's cached:
+    # if ready, the copy is grounded in what's really in the media; if not, we
+    # generate from the user's text now and it gets richer on a later regenerate
+    # once the cron has analyzed this upload.
     try:
         result = ai.generate_metadata(
             content.platform,
@@ -461,6 +468,7 @@ def generate_ai(request, pk):
             filename=video.original_filename,
             media_type=video.media_type,
             category=video.category,
+            media_analysis=video.ai_media_analysis,
         )
     except Exception as exc:  # SDK / network / parse — isolate to this platform
         logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)

@@ -8,15 +8,15 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
 
-# Never let two runs publish at the same time (would risk double-posting).
-concurrency:
-  group: publish-due-posts
-  cancel-in-progress: false
-
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Never let two publish runs overlap (would risk double-posting). Scoped to
+    # this job so a slow analyze job (below) can't delay time-critical publishing.
+    concurrency:
+      group: publish-due-posts
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -64,3 +64,35 @@ jobs:
           # Used in the email body's "view dashboard" link (no request in cron).
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
         run: python manage.py publish_due_posts
+
+  analyze:
+    # Grounds AI generation in what's really in each upload (objects, actions,
+    # on-screen text). Runs here, not in the Render web app, because downloading
+    # a clip + waiting for Gemini to process it can exceed a web request timeout.
+    # Separate job + concurrency group so it never delays the publish job above.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: analyze-media
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Analyze pending media
+        env:
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          DJANGO_DEBUG: "false"
+          # Same shared Neon DB the web app writes to — that's the only link.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          # Required for analysis; without it the command no-ops cleanly.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python manage.py analyze_pending_media
