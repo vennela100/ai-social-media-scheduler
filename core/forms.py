@@ -105,10 +105,10 @@ class VideoUploadForm(forms.Form):
         widget=forms.TextInput(attrs={"placeholder": "fitness, tech, education…"}),
     )
     description = forms.CharField(
-        label="What is this about?",
-        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "Describe the content, the key points, the tone you want. The more you say here, the better the AI's output."}),
+        label="Anything to add? (optional)",
+        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "The AI watches your video or image and writes from what it sees. Add notes here to steer the tone or mention things it can't see."}),
         required=False,
-        help_text="This is the main thing the AI writes from — your words become the source of truth.",
+        help_text="Optional — the AI analyzes the file itself. Use this for context it can't see: names, links, the tone you want.",
     )
     platforms = forms.MultipleChoiceField(
         choices=Platform.choices,

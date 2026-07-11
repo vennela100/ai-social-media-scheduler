@@ -19,6 +19,7 @@ urlpatterns = [
     path("storage/delete-all/", views.storage_delete_all, name="storage_delete_all"),
     path("storage/video/<int:pk>/archive/", views.video_archive_source, name="video_archive_source"),
     path("video/<int:pk>/generate/", views.generate, name="generate"),
+    path("video/<int:pk>/analyze/", views.analyze_media, name="analyze_media"),
     path("ai/<int:pk>/edit/", views.aicontent_edit, name="aicontent_edit"),
     path("ai/<int:pk>/generate/", views.generate_ai, name="generate_ai"),
     path("ai/<int:pk>/schedule/", views.schedule_content, name="schedule_content"),

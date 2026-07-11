@@ -433,6 +433,48 @@ def video_detail(request, pk):
 
 @require_POST
 @login_required
+def analyze_media(request, pk):
+    """Have Gemini watch this upload NOW, so the review page can ground every
+    platform draft in the media itself before generating — the analysis IS the
+    description; the user doesn't have to type one.
+
+    Same 200-JSON contract as generate_ai. Fail-open: on any failure the page
+    just generates from the user's text, and the analyze_pending_media cron
+    remains the retry path — this endpoint never hard-fails the flow.
+    """
+    video = get_object_or_404(Video, pk=pk, user=request.user)
+    Status = Video.AnalysisStatus
+    rows = Video.objects.filter(pk=video.pk)
+
+    if video.ai_media_analysis.strip():  # already watched — reuse the cache
+        return JsonResponse(
+            {"ok": True, "status": "done", "analysis": video.ai_media_analysis}
+        )
+    if video.ai_analysis_status == Status.SKIPPED:
+        return JsonResponse({"ok": True, "status": "skipped"})
+    if not ai.is_configured() or not video.file_url or video.source_deleted:
+        return JsonResponse(
+            {"ok": False, "status": "failed", "error": "Analysis isn't available for this upload."}
+        )
+
+    reason = ai.analysis_skip_reason(video)
+    if reason:
+        rows.update(ai_analysis_status=Status.SKIPPED)
+        logger.info("Skipping analysis of video %s: %s", video.pk, reason)
+        return JsonResponse({"ok": True, "status": "skipped"})
+
+    text = ai.analyze_media(video)  # caches on success, "" on any failure (logged)
+    rows.update(ai_analysis_status=Status.DONE if text else Status.FAILED)
+    if text:
+        return JsonResponse({"ok": True, "status": "done", "analysis": text})
+    return JsonResponse(
+        {"ok": False, "status": "failed",
+         "error": "Couldn't analyze the file — generating from your text instead."}
+    )
+
+
+@require_POST
+@login_required
 def generate_ai(request, pk):
     """Generate (or regenerate) one draft from the video's title + description.
 
@@ -485,8 +527,13 @@ def generate_ai(request, pk):
         generation_status=AIContent.GenStatus.DONE,
     )
 
-    # Nudge the user to describe the video when they didn't — better output next time.
-    notice = "" if video.user_description.strip() else "For better results, describe your video above."
+    # The media analysis (or the user's own note) grounds the copy. Only when
+    # NEITHER exists did the model write blind from the filename — say so.
+    grounded = video.ai_media_analysis.strip() or video.user_description.strip()
+    notice = "" if grounded else (
+        "Written from the filename only — the AI couldn't watch this file. "
+        "Regenerate to retry, or add a description."
+    )
     return JsonResponse(
         {
             "ok": True,

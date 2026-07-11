@@ -635,3 +635,9 @@ tbody tr:hover .row-actions { opacity: 1; }
 .video-grid .video-card { background: transparent; border: none; box-shadow: none; padding: 0; }
 .video-grid .video-card:hover { transform: none; box-shadow: none; }
 .video-grid .video-card .thumb { border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
+
+/* "What the AI saw" — the cached Gemini media analysis on the review page */
+.ai-analysis { margin-top: 10px; font-size: 13px; }
+.ai-analysis summary { cursor: pointer; color: var(--text-faint); user-select: none; }
+.ai-analysis summary:hover { color: var(--text-dim); }
+.ai-analysis p { margin: 8px 0 0; color: var(--text-dim); line-height: 1.55; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
