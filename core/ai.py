@@ -46,49 +46,96 @@ PLATFORM_LIMITS = {
     "linkedin": {"title": 150, "description": 3000, "max_hashtags": 5},
 }
 
-# Reach-optimised, media-type-aware prompts (always on — no toggle). Each embeds
-# [[MEDIA_TYPE]] / [[DESC]] / [[CATEGORY]] placeholders that _build_prompt fills,
-# and asks for the platform's own JSON shape; _normalize() maps those keys back
-# onto our (title, description, hashtags) trio.
+# Rules every platform prompt ends with: platform-NATIVE output, strict
+# grounding in the analysis + user text, and exactly one call-to-action.
+SHARED_PROMPT_RULES = (
+    "Rules that always apply:\n"
+    "- Write platform-NATIVE content for THIS platform only: its own hook, structure and "
+    "tone — never text that could be lightly reworded onto another platform.\n"
+    "- Ground every claim strictly in the content details above (the media analysis and "
+    "the creator's own words). Never invent facts, numbers, names or events not present in them.\n"
+    "- Exactly ONE call-to-action in the whole output.\n"
+    "- Stay comfortably within the character limits — trimming is a safety net, not the plan.\n\n"
+)
+
+# Reach-optimised, media-type-aware prompts (always on — no toggle), tuned to
+# each platform's 2026 ranking signals: YouTube = satisfaction + session
+# contribution, Instagram = watch time + DM shares + saves, LinkedIn = dwell
+# time + comment depth. Each embeds [[MEDIA_TYPE]] / [[DESC]] / [[CATEGORY]]
+# placeholders that _build_prompt fills, and asks for the platform's own JSON
+# shape; _normalize() maps those keys back onto our (title, description,
+# hashtags) trio.
 PLATFORM_PROMPTS = {
     "youtube": (
-        "You are a YouTube SEO expert who writes titles and descriptions that rank and get clicked.\n\n"
+        "You are a YouTube strategist optimizing for the 2026 algorithm, which ranks by viewer "
+        "SATISFACTION and SESSION CONTRIBUTION (how much good watching happens after the click) — "
+        "not raw clicks. Tone: clear and searchable.\n\n"
         'Media type: "[[MEDIA_TYPE]]"\n'
-        'Video topic: "[[DESC]]"\n'
+        'What the content contains: "[[DESC]]"\n'
         'Category: "[[CATEGORY]]"\n\n'
-        "Title: use formula [Outcome or Curiosity Hook] + [Timeframe or Consequence], max 100 chars, no clickbait.\n\n"
-        "Description: first 2 lines must contain the primary keyword naturally. Then 2-3 keyword-rich paragraphs. "
-        "Then a Timestamps section with placeholder entries. Then a Connect section placeholder. Max 5000 chars.\n\n"
-        "Tags: first tag is the exact primary keyword phrase. Next 5-7 are specific variations. Last 3-5 are broad "
-        "category terms. Return as comma-separated string, 10-15 tags total.\n\n"
+        "TITLE (max 100 chars): main keyword in the first 3-4 words, then an HONEST promise of "
+        "the outcome the viewer gets. The title must match what the content actually delivers — "
+        'over-promising and clickbait are forbidden. Prefer the pattern "[Outcome] in '
+        '[method/time] | [Series]".\n\n'
+        "DESCRIPTION (max 5000 chars) as blocks separated by blank lines, in this order:\n"
+        "1. First 2 lines: repeat the promise with the main keyword — this is the search snippet.\n"
+        "2. A 2-3 sentence overview using keywords naturally; if the content is part of a series, "
+        'say so ("Episode X of the <series> series").\n'
+        '3. A "⏱ Timestamps" section ONLY if the content details show distinct segments — '
+        "otherwise omit this block entirely.\n"
+        '4. A "▶ Watch next" block with placeholder links to the next episode and the playlist '
+        "(session-contribution signal).\n"
+        '5. A "🔗 Links" block with a GitHub repo placeholder.\n'
+        '6. A subscribe line with a SPECIFIC promise (e.g. "New Django episode every Tuesday in '
+        'Telugu") — never a generic "please subscribe".\n\n'
+        "TAGS: 10-15 comma-separated tags mixing broad and specific terms.\n\n"
+        + SHARED_PROMPT_RULES +
         "Return as JSON only:\n"
         '{"title": "", "description": "", "tags": ""}'
     ),
     "instagram": (
-        "You are an Instagram growth strategist who writes captions that stop scrolls and drive saves.\n\n"
+        "You are an Instagram strategist optimizing for the 2026 algorithm, which ranks by WATCH "
+        "TIME, DM SHARES and SAVES — not likes. Tone: casual, energetic, share-friendly.\n\n"
         'Media type: "[[MEDIA_TYPE]]"\n'
-        'Content topic: "[[DESC]]"\n'
+        'What the content contains: "[[DESC]]"\n'
         'Category: "[[CATEGORY]]"\n\n'
-        "If media_type is image: write the caption to complement a visual — first line references what the viewer "
-        "is seeing and why it matters.\n"
-        "If media_type is video: write for a Reel — first line stops the scroll and teases what happens.\n\n"
-        "Caption: first line scroll-stopping hook under 125 chars no hashtags. Blank line. Body in short punchy lines "
-        "max 2 sentences per paragraph. End with a specific easy-to-answer question. Then 3 blank lines. Then hashtags: "
-        "5 broad (1M+ posts), 10 niche (100K-1M posts), 10 micro (under 100K posts). Never put hashtags in caption body.\n\n"
+        "If media_type is image: line 1 references what the viewer is seeing and why it matters.\n"
+        "If media_type is video: write for a Reel.\n\n"
+        "CAPTION (max 2200 chars):\n"
+        "- Line 1 (under 125 chars): a hook engineered to be either SHARE-worthy "
+        '("Send this to a friend who...") or SAVE-worthy ("The X things I use daily 👇"). '
+        "1-2 emojis max.\n"
+        "- Body: 3-4 short lines, one idea per line. Naturally include ONE searchable keyword "
+        'phrase (e.g. "django tutorial for beginners") — captions are indexed for search.\n'
+        "- End with exactly ONE CTA and it must be a share or save action "
+        '("Share this with your study buddy" / "Save for later 🔖") — NEVER "like this post".\n\n'
+        "HASHTAGS: only 5-10 focused, lowercase, niche-relevant hashtags (not 30) — the "
+        "keyword-rich caption matters more than hashtags. Never put hashtags in the caption body.\n\n"
+        + SHARED_PROMPT_RULES +
         "Return as JSON only:\n"
         '{"caption": "", "hashtags": ""}'
     ),
     "linkedin": (
-        "You are a LinkedIn content strategist who writes posts that get pushed by the algorithm.\n\n"
+        "You are a LinkedIn strategist optimizing for the 2026 algorithm, which ranks by DWELL "
+        "TIME and COMMENT DEPTH — thin posts die. Tone: professional, first-person, story-driven.\n\n"
         'Media type: "[[MEDIA_TYPE]]"\n'
-        'Content topic: "[[DESC]]"\n'
+        'What the content contains: "[[DESC]]"\n'
         'Category: "[[CATEGORY]]"\n\n'
-        "If media_type is image: opening line references what the image shows. Write the post as a story or insight "
-        "the image illustrates.\n"
-        "If media_type is video: write in first-person narrative about the insight or story from the video.\n\n"
-        "Post: bold opening statement that creates curiosity. Blank line. 3-4 paragraphs max 2 lines each. First-person "
-        "tone throughout. No URLs or links anywhere. End with one simple open question. Blank line. Max 5 hashtags on "
-        "last line only.\n\n"
+        "If media_type is image: the opening references what the image shows and the post tells "
+        "the story or insight it illustrates.\n"
+        "If media_type is video: write a first-person narrative about the insight or story from "
+        "the video.\n\n"
+        "POST (max 3000 chars):\n"
+        "- First 150 chars: a hook with a concrete result, a number, or a contrarian take. "
+        'No greetings, no "excited to share".\n'
+        "- Body: 4-6 short paragraphs (1-2 lines each) following a story arc: the Problem → what "
+        "was built → the ONE interesting decision along the way → what was learned. Make it "
+        "substantial enough to create real dwell time — never thin.\n"
+        "- End with exactly ONE genuine, specific question that invites opinions — never a lazy "
+        '"thoughts?".\n'
+        "- NO URLs anywhere in the post body.\n\n"
+        "HASHTAGS: exactly 3-5, PascalCase, professional.\n\n"
+        + SHARED_PROMPT_RULES +
         "Return as JSON only:\n"
         '{"post": "", "hashtags": "", "first_comment_reminder": "Paste your video or image link in the first comment '
         '— never in the post body, it kills reach by 50%"}'
