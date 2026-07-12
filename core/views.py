@@ -27,6 +27,7 @@ from .forms import (
     AIContentForm,
     GenerateMetadataForm,
     SignupForm,
+    VIDEO_MAX_MB,
     VideoUploadForm,
     media_type_for,
 )
@@ -377,11 +378,10 @@ def _create_r2_video(request, form):
         messages.error(request, "The upload didn't reach storage. Please retry.")
         return None
 
-    # Thumbnail: the page captures a frame client-side and sends it as a tiny
-    # JPEG; it lives on Cloudinary like every other image. Best-effort — a
-    # video without a preview image is annoying, not broken.
+    # Thumbnail: prefer the user's finished thumbnail page/image. Fall back to
+    # the captured video frame only when they did not provide one.
     thumbnail_url, thumbnail_public_id = "", ""
-    thumb = request.FILES.get("thumb")
+    thumb = form.cleaned_data.get("thumbnail_image") or request.FILES.get("thumb")
     if thumb is not None:
         try:
             t = upload_media(thumb, media_type="image")
@@ -444,15 +444,27 @@ def upload(request):
                     messages.error(request, "Upload failed. Please try again.")
                     return render(request, "upload.html", _upload_context(form))
 
+                thumbnail_url = result["thumbnail_url"]
+                thumbnail_public_id = ""
+                thumb = form.cleaned_data.get("thumbnail_image")
+                if media_type == "video" and thumb is not None:
+                    try:
+                        t = upload_media(thumb, media_type="image")
+                        thumbnail_url = t["file_url"]
+                        thumbnail_public_id = t["public_id"]
+                    except Exception as exc:
+                        logger.warning("Custom thumbnail upload failed: %s", exc)
+
                 video = Video.objects.create(
                     user=request.user,
                     media_type=media_type,
                     file_url=result["file_url"],
-                    thumbnail_url=result["thumbnail_url"],
+                    thumbnail_url=thumbnail_url,
                     original_filename=result["original_filename"],
                     source_size_bytes=getattr(uploaded, "size", 0) or 0,
                     duration_seconds=result.get("duration", 0) or 0,
                     cloudinary_public_id=result.get("public_id", ""),
+                    thumbnail_public_id=thumbnail_public_id,
                     user_title=form.cleaned_data["title"],
                     user_description=form.cleaned_data["description"],
                     category=form.cleaned_data["category"],
@@ -482,6 +494,7 @@ def _upload_context(form):
         "ai_ready": ai.is_configured(),
         "r2_ready": r2.is_configured(),
         "r2_max_mb": r2.R2_VIDEO_MAX_MB,
+        "video_max_mb": VIDEO_MAX_MB,
     }
 
 
@@ -544,8 +557,6 @@ def analyze_media(request, pk):
         return JsonResponse(
             {"ok": True, "status": "done", "analysis": video.ai_media_analysis}
         )
-    if video.ai_analysis_status == Status.SKIPPED:
-        return JsonResponse({"ok": True, "status": "skipped"})
     if not ai.is_configured() or not video.file_url or video.source_deleted:
         return JsonResponse(
             {"ok": False, "status": "failed", "error": "Analysis isn't available for this upload."}
@@ -556,6 +567,8 @@ def analyze_media(request, pk):
         rows.update(ai_analysis_status=Status.SKIPPED)
         logger.info("Skipping analysis of video %s: %s", video.pk, reason)
         return JsonResponse({"ok": True, "status": "skipped"})
+    if video.ai_analysis_status == Status.SKIPPED:
+        rows.update(ai_analysis_status=Status.PENDING)
 
     text = ai.analyze_media(video)  # caches on success, "" on any failure (logged)
     rows.update(ai_analysis_status=Status.DONE if text else Status.FAILED)

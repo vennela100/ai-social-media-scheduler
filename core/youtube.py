@@ -173,7 +173,7 @@ def get_credentials(account: SocialAccount):
 # --- Upload ---
 
 def publish(account: SocialAccount, *, video_url: str, title: str, description: str,
-            tags=None, privacy: str = DEFAULT_PRIVACY) -> str:
+            tags=None, privacy: str = DEFAULT_PRIVACY, thumbnail_url: str = "") -> str:
     """
     Upload the video at video_url to YouTube. Returns the new video id.
 
@@ -208,8 +208,30 @@ def publish(account: SocialAccount, *, video_url: str, title: str, description: 
         _, response = request.next_chunk()
 
     video_id = response["id"]
+    if thumbnail_url:
+        try:
+            set_thumbnail(youtube, video_id, thumbnail_url)
+        except Exception as exc:
+            logger.warning("YouTube thumbnail set failed for %s: %s", video_id, exc)
     logger.info("Published to YouTube: %s", video_id)
     return video_id
+
+
+def set_thumbnail(youtube, video_id: str, thumbnail_url: str) -> None:
+    """Upload a custom thumbnail for an already-created YouTube video."""
+    from googleapiclient.http import MediaIoBaseUpload
+
+    resp = requests.get(thumbnail_url, timeout=60)
+    resp.raise_for_status()
+    content_type = resp.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+    media = MediaIoBaseUpload(
+        io.BytesIO(resp.content),
+        mimetype=content_type if content_type in {"image/jpeg", "image/png"} else "image/jpeg",
+        chunksize=-1,
+        resumable=True,
+    )
+    youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+    logger.info("Set YouTube thumbnail for %s", video_id)
 
 
 # --- Analytics ---

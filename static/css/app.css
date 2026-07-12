@@ -125,14 +125,14 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .nav a.active::before { content: ""; position: absolute; left: -18px; top: 50%; transform: translateY(-50%); width: 3px; height: 22px; border-radius: 0 3px 3px 0; background: var(--text); }
 
 .sidebar-foot { margin-top: auto; padding-top: 18px; border-top: 1px solid var(--border); }
-.user-chip { display: flex; align-items: center; gap: 11px; padding: 8px 10px; }
+.user-chip { display: flex; align-items: center; gap: 11px; padding: 8px 10px; min-width: 0; }
 .avatar {
   width: 34px; height: 34px; border-radius: 50%; flex: none;
   display: grid; place-items: center; font-weight: 700; font-size: 14px;
   background: var(--text); color: var(--bg);
 }
-.user-chip .who { font-size: 13.5px; font-weight: 600; }
-.user-chip .who small { display: block; color: var(--text-faint); font-weight: 400; font-size: 11px; }
+.user-chip .who { font-size: 13.5px; font-weight: 600; min-width: 0; overflow: hidden; }
+.user-chip .who small { display: block; color: var(--text-faint); font-weight: 400; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
 .topbar { position: fixed; top: 16px; right: 22px; z-index: 50; display: flex; align-items: center; gap: 12px; }
 .topbar-user { font-size: 13px; font-weight: 600; color: var(--text-faint); }
 .topbar form { margin: 0; }
@@ -254,7 +254,6 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing:
 .media-preview { margin-top: 16px; }
 .media-preview-label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
 .media-preview-box img, .media-preview-box video { max-width: 100%; max-height: 280px; border-radius: 12px; display: block; background: var(--surface-3); }
-
 .li-reminder { margin: 4px 0 14px; padding: 10px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.45;
   color: var(--warn); background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); }
 
