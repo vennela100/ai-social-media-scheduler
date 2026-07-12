@@ -159,18 +159,25 @@ def save_account(user, long_token: str, ig_user_id: str, expires_in: int) -> Soc
 
 # --- Publishing ---
 
-def publish(account: SocialAccount, *, video_url: str, caption: str) -> str:
+def publish(account: SocialAccount, *, video_url: str, caption: str, cover_url: str = "") -> str:
     """Publish a Reel via the container flow. Returns the IG media id."""
     ig_user_id = account.platform_account_id
     token = account.access_token
 
     # 1. Create the media container.
-    create = requests.post(
-        f"{GRAPH}/{ig_user_id}/media",
-        data={"media_type": "REELS", "video_url": video_url, "caption": caption, "access_token": token},
-        timeout=60,
-    )
-    creation_id = _check(create, "container create")["id"]
+    data = {"media_type": "REELS", "video_url": video_url, "caption": caption, "access_token": token}
+    if cover_url:
+        data["cover_url"] = cover_url
+    create = requests.post(f"{GRAPH}/{ig_user_id}/media", data=data, timeout=60)
+    try:
+        creation_id = _check(create, "container create")["id"]
+    except Exception:
+        if not cover_url:
+            raise
+        logger.warning("Instagram rejected cover_url; retrying container create without it.")
+        data.pop("cover_url", None)
+        create = requests.post(f"{GRAPH}/{ig_user_id}/media", data=data, timeout=60)
+        creation_id = _check(create, "container create")["id"]
     logger.info("Instagram container created: %s", creation_id)
 
     # 2. Poll until Instagram has ingested the video.

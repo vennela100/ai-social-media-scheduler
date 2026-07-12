@@ -34,8 +34,13 @@ VIDEO_POLL_INTERVAL = 3            # seconds between state checks
 # huge clip and waiting on Gemini to process it risks OOM/timeouts on small
 # runners, so such videos degrade to text-only generation instead of crashing.
 # Env-overridable; set either to 0 to disable that particular check.
-MEDIA_ANALYSIS_MAX_BYTES = int(os.environ.get("MEDIA_ANALYSIS_MAX_BYTES", str(100 * 1024 * 1024)))
-MEDIA_ANALYSIS_MAX_SECONDS = int(os.environ.get("MEDIA_ANALYSIS_MAX_SECONDS", "300"))
+def _env_int(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    return int(raw) if raw else default
+
+
+MEDIA_ANALYSIS_MAX_BYTES = _env_int("MEDIA_ANALYSIS_MAX_BYTES", 512 * 1024 * 1024)
+MEDIA_ANALYSIS_MAX_SECONDS = _env_int("MEDIA_ANALYSIS_MAX_SECONDS", 300)
 
 # Per-platform hard limits we generate within and validate against. These are
 # the public API/UX caps; tune if a platform changes them.

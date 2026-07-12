@@ -259,7 +259,11 @@
         document.querySelectorAll('.draft[data-status="pending"]'));
 
       // Fire all pending drafts in parallel — each updates its own card.
-      function generateAll() { pendingCards.forEach(generate); }
+      function generateAll() {
+        analyzeIfNeeded(pendingCards).finally(function () {
+          pendingCards.forEach(generate);
+        });
+      }
 
       function showAnalysis(text) {
         var box = document.querySelector("[data-analysis]");
@@ -274,7 +278,34 @@
       // problem falls straight through to text-only generation, and the
       // analyze_pending_media cron retries later.
       var analysisStatus = grid ? grid.dataset.analysisStatus : "done";
-      if (grid && pendingCards.length && (analysisStatus === "pending" || analysisStatus === "failed")) {
+      var analysisPromise = null;
+      function needsAnalysis() {
+        return grid && (
+          analysisStatus === "pending" ||
+          analysisStatus === "failed" ||
+          analysisStatus === "skipped"
+        );
+      }
+      function analyzeIfNeeded(cards) {
+        if (!needsAnalysis()) return Promise.resolve();
+        var watching = "Watching your " + (grid.dataset.mediaType || "video") + "...";
+        (cards || []).forEach(function (card) { setState(card, "pending", watching); });
+        if (!analysisPromise) {
+          analysisPromise = fetch(grid.dataset.analyzeUrl, { method: "POST", headers: { "X-CSRFToken": csrftoken } })
+            .then(function (r) { return r.text(); })
+            .then(function (t) {
+              var d; try { d = JSON.parse(t); } catch (e) { d = null; }
+              if (d && d.ok && d.analysis) {
+                showAnalysis(d.analysis);
+                analysisStatus = "done";
+                grid.dataset.analysisStatus = "done";
+              }
+            })
+            .catch(function () {});
+        }
+        return analysisPromise;
+      }
+      if (false && grid && pendingCards.length && (analysisStatus === "pending" || analysisStatus === "failed")) {
         var watching = "Watching your " + (grid.dataset.mediaType || "video") + "…";
         pendingCards.forEach(function (card) { setState(card, "pending", watching); });
         fetch(grid.dataset.analyzeUrl, { method: "POST", headers: { "X-CSRFToken": csrftoken } })
@@ -290,7 +321,10 @@
       }
       // Manual regenerate.
       document.querySelectorAll("[data-regen]").forEach(function (btn) {
-        btn.addEventListener("click", function () { generate(btn.closest(".draft")); });
+        btn.addEventListener("click", function () {
+          var card = btn.closest(".draft");
+          analyzeIfNeeded([card]).finally(function () { generate(card); });
+        });
       });
 
       // --- Best-time-to-post suggestions ---

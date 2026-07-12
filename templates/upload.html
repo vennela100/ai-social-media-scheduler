@@ -25,6 +25,7 @@
 
   <form method="post" enctype="multipart/form-data" class="uploader reveal" id="upload-form"
         data-r2="{{ r2_ready|yesno:'1,0' }}" data-r2-max-mb="{{ r2_max_mb }}"
+        data-classic-video-max-mb="{{ video_max_mb }}"
         data-presign-url="{% url 'core:upload_presign' %}">
     {% csrf_token %}
 
@@ -70,6 +71,12 @@
         <label for="{{ form.description.id_for_label }}">What's it about?</label>
         {{ form.description }}
         <span class="helptext">{{ form.description.help_text }}</span>
+      </div>
+      <div class="field thumb-field">
+        <label for="{{ form.thumbnail_image.id_for_label }}">Finished thumbnail page/image</label>
+        {{ form.thumbnail_image }}
+        <span class="helptext">{{ form.thumbnail_image.help_text }}</span>
+        {{ form.thumbnail_image.errors }}
       </div>
       <div class="field platform-pick">
         <label>Publish to</label>
@@ -229,7 +236,7 @@
           xhr.onload = function () {
             (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error("Storage rejected the upload (HTTP " + xhr.status + ")."));
           };
-          xhr.onerror = function () { reject(new Error("Network error during upload.")); };
+          xhr.onerror = function () { reject(new Error("Storage upload was blocked by the browser. For large videos, check the Cloudflare R2 bucket CORS settings.")); };
           xhr.send(file);
         });
       }
@@ -249,6 +256,8 @@
         form.addEventListener("submit", function (e) {
           var file = fileInput.files && fileInput.files[0];
           if (!file || kind(file.name) !== "video") return;   // images / no file: classic path
+          var classicMaxMb = parseInt(form.dataset.classicVideoMaxMb, 10) || 100;
+          if (file.size <= classicMaxMb * 1024 * 1024) return; // small videos use Django -> Cloudinary
           e.preventDefault();
           if (file.size > parseInt(form.dataset.r2MaxMb, 10) * 1024 * 1024) {
             return fail("This video is " + Math.round(file.size / 1024 / 1024) + " MB; the limit is " + form.dataset.r2MaxMb + " MB.");
@@ -283,6 +292,30 @@
               body.append("r2_filename", file.name);
               body.append("r2_duration", String(Math.round(duration)));
               if (thumbBlob) body.append("thumb", thumbBlob, "thumb.jpg");
+              return fetch(form.action || window.location.href, { method: "POST", body: body });
+            })
+            .then(function (r) { window.location.assign(r.url); })
+            .catch(function (err) { fail(err.message || "Upload failed. Please try again."); });
+        });
+      }
+
+      if (form && !r2Enabled) {
+        form.addEventListener("submit", function (e) {
+          var file = fileInput.files && fileInput.files[0];
+          if (!file || kind(file.name) !== "video") return;
+          e.preventDefault();
+          submitBtn.disabled = true;
+          setProgress("Preparing...");
+          var frameBlob = null;
+          captureFrame(file)
+            .then(function (frame) {
+              frameBlob = frame;
+              return null;
+            })
+            .then(function () {
+              setProgress("Uploading...");
+              var body = new FormData(form);
+              if (frameBlob) body.append("thumb", frameBlob, "thumb.jpg");
               return fetch(form.action || window.location.href, { method: "POST", body: body });
             })
             .then(function (r) { window.location.assign(r.url); })

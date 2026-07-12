@@ -97,6 +97,11 @@ class VideoUploadForm(forms.Form):
                   f"Image ({', '.join(sorted(IMAGE_EXTENSIONS))}) up to {IMAGE_MAX_MB} MB. "
                   f"Images can be posted to Instagram and LinkedIn (not YouTube).",
     )
+    thumbnail_image = forms.FileField(
+        label="Thumbnail page/image (optional)",
+        required=False,
+        help_text="Upload your finished YouTube/Instagram thumbnail image. The app will use it when publishing.",
+    )
     title = forms.CharField(
         label="Title (optional)",
         required=False,
@@ -141,6 +146,19 @@ class VideoUploadForm(forms.Form):
                 f"This {media_type} is {f.size / 1024 / 1024:.1f} MB; the {media_type} limit is {max_mb} MB."
             )
 
+        return f
+
+    def clean_thumbnail_image(self):
+        f = self.cleaned_data["thumbnail_image"]
+        if f is None:
+            return None
+        media_type = media_type_for(f.name)
+        if media_type != "image":
+            raise forms.ValidationError("Thumbnail image must be JPG, PNG, or WebP.")
+        if f.size > IMAGE_MAX_MB * 1024 * 1024:
+            raise forms.ValidationError(
+                f"This image is {f.size / 1024 / 1024:.1f} MB; the image limit is {IMAGE_MAX_MB} MB."
+            )
         return f
 
 

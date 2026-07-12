@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from . import instagram
+from . import instagram, youtube
 from .models import AIContent, Platform, ScheduledPost, SocialAccount, Video
 
 
@@ -140,6 +140,85 @@ class ScheduledPostDashboardTests(TestCase):
 
         self.assertEqual(stats, {"views": 162, "likes": 7, "comments": 0})
         self.assertEqual(get.call_args_list[1].kwargs["params"]["metric"], "views")
+
+    @patch("core.instagram.time.sleep")
+    @patch("core.instagram._resolve_media_id", return_value="ig-media-1")
+    @patch("core.instagram.requests.get")
+    @patch("core.instagram.requests.post")
+    def test_instagram_publish_retries_without_cover_url(self, post, get, resolve_media_id, sleep):
+        class Response:
+            content = b"{}"
+
+            def __init__(self, ok=True, data=None, status_code=200):
+                self.ok = ok
+                self._data = data or {}
+                self.status_code = status_code
+                self.text = "bad cover"
+
+            def json(self):
+                return self._data
+
+        responses = [
+            Response(False, {"error": {"message": "Unsupported cover_url"}}, 400),
+            Response(True, {"id": "container-1"}),
+            Response(True, {"id": "published-1"}),
+        ]
+        posted_payloads = []
+
+        def capture_post(*args, **kwargs):
+            posted_payloads.append(dict(kwargs["data"]))
+            return responses.pop(0)
+
+        post.side_effect = capture_post
+        get.return_value = Response(True, {"status_code": "FINISHED"})
+
+        media_id = instagram.publish(
+            self.account,
+            video_url="https://example.com/video.mp4",
+            caption="Caption",
+            cover_url="https://example.com/thumb.jpg",
+        )
+
+        self.assertEqual(media_id, "ig-media-1")
+        self.assertIn("cover_url", posted_payloads[0])
+        self.assertNotIn("cover_url", posted_payloads[1])
+
+    @patch("core.youtube.requests.get")
+    def test_youtube_set_thumbnail_uploads_image(self, get):
+        class Response:
+            content = b"jpg-bytes"
+            headers = {"Content-Type": "image/jpeg"}
+
+            def raise_for_status(self):
+                return None
+
+        class ThumbSet:
+            def __init__(self):
+                self.called = False
+
+            def set(self, **kwargs):
+                self.kwargs = kwargs
+                return self
+
+            def execute(self):
+                self.called = True
+                return {}
+
+        class Service:
+            def __init__(self):
+                self.thumb = ThumbSet()
+
+            def thumbnails(self):
+                return self.thumb
+
+        get.return_value = Response()
+        service = Service()
+
+        youtube.set_thumbnail(service, "yt123", "https://example.com/thumb.jpg")
+
+        get.assert_called_once_with("https://example.com/thumb.jpg", timeout=60)
+        self.assertEqual(service.thumb.kwargs["videoId"], "yt123")
+        self.assertTrue(service.thumb.called)
 
     @patch("core.views.ai.is_configured", return_value=True)
     @patch("core.views.ai.suggest_post_times", side_effect=RuntimeError("quota exceeded"))
