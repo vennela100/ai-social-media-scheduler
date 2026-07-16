@@ -2,10 +2,11 @@ name: Publish due posts
 
 # The scheduler. Runs on GitHub's infrastructure independent of whether the
 # Render web app is awake, so scheduled posts publish on time even with your
-# laptop off. GitHub cron can lag a few minutes under load — fine for a 5-min tick.
+# laptop off. GitHub cron can lag a few minutes under load; this 15-min tick
+# keeps Neon Free compute usage low.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
 
 jobs:
