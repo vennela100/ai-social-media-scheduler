@@ -298,10 +298,17 @@ def cleanup_analysis(gfile) -> None:
 
 # Gemini intermittently returns 503 UNAVAILABLE ("this model is experiencing
 # high demand") — a transient, server-side overload, not a problem with our
-# request. Retry a few times with exponential backoff so a momentary spike
+# request. Retry a couple of times with exponential backoff so a momentary spike
 # recovers automatically instead of surfacing to the user as a hard failure.
-GENERATE_MAX_ATTEMPTS = 3
+# On Render's free tier (2-3 workers) we keep this SHORT so a blocked worker
+# doesn't starve the health check — worst-case total ≈ base_delay × 2 = 3s.
+GENERATE_MAX_ATTEMPTS = _env_int("GENERATE_MAX_ATTEMPTS", 2)
 GENERATE_RETRY_BASE_DELAY = 1.5  # seconds; doubles each retry (1.5s, 3s, ...)
+
+# Hard wall-clock cap on a single generate_content call (including retries).
+# Prevents a hanging Gemini response from tying up a gunicorn worker forever,
+# which would eventually starve Render's /healthz/ check and trigger alerts.
+GENERATE_TIMEOUT = _env_int("GENERATE_TIMEOUT", 25)  # seconds
 
 
 def _is_transient_overload(exc) -> bool:
@@ -319,14 +326,22 @@ def _is_transient_overload(exc) -> bool:
 
 
 def _generate_with_retry(client, **kwargs):
-    """Call generate_content, retrying transient overloads with backoff."""
+    """Call generate_content, retrying transient overloads with backoff.
+
+    Also enforces GENERATE_TIMEOUT as a wall-clock cap so a single call can
+    never block a worker longer than that (important for health-check liveness).
+    """
+    deadline = time.time() + GENERATE_TIMEOUT
     for attempt in range(1, GENERATE_MAX_ATTEMPTS + 1):
         try:
             return client.models.generate_content(**kwargs)
         except Exception as exc:
+            remaining = deadline - time.time()
             if attempt == GENERATE_MAX_ATTEMPTS or not _is_transient_overload(exc):
                 raise
             delay = GENERATE_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            if remaining < delay + 2:  # not enough time for another attempt
+                raise
             logger.warning(
                 "Gemini overloaded (attempt %d/%d), retrying in %.1fs: %s",
                 attempt, GENERATE_MAX_ATTEMPTS, delay, exc,

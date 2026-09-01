@@ -9,9 +9,11 @@ services:
     buildCommand: "./build.sh"
     # --timeout 120: uploads stream through this process up to Cloudinary, which
     # easily exceeds gunicorn's 30s default and gets the worker SIGKILLed (→ 500).
-    # --workers 2: keep the /healthz/ check answerable while one worker is busy
-    # on a slow upload, so Render doesn't mark the service unhealthy.
-    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --timeout 120 --workers 2"
+    # --workers 3 --threads 2: keep the /healthz/ check answerable even when two
+    # workers are blocked on slow Gemini API calls. Threads let a worker serve
+    # the health check while its main thread waits on I/O. ~200MB total, fits
+    # Render free tier's 512MB.
+    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --timeout 120 --workers 3 --threads 2"
     healthCheckPath: /healthz/
     envVars:
       - key: DJANGO_SECRET_KEY
