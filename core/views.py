@@ -45,6 +45,20 @@ from .storage import (
 logger = logging.getLogger("scheduler")
 
 
+def csrf_failure(request, reason=""):
+    """Return JSON for CSRF failures instead of an HTML page the JS cannot parse."""
+    if request.path.startswith("/api/") or "/generate/" in request.path or "/analyze/" in request.path:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": "Your session expired. Refresh the page and try again.",
+                "detail": reason if settings.DEBUG else "",
+            },
+            status=403,
+        )
+    return JsonResponse({"ok": False, "error": "CSRF verification failed."}, status=403)
+
+
 def home(request):
     """Front door. Logged in -> the app; logged out -> the login page.
 
@@ -596,35 +610,46 @@ def generate_ai(request, pk):
     # user deleted the video while it was generating), which then trips the FK.
     # update() just touches 0 rows in that case — no crash.
     rows = AIContent.objects.filter(pk=content.pk)
+    fallback_notice = ""
 
     if not ai.is_configured():
-        rows.update(generation_status=AIContent.GenStatus.FAILED)
-        return JsonResponse(
-            {"ok": False, "error": "AI isn't configured (GEMINI_API_KEY)."}, status=200
-        )
-
-    # Media analysis (the heavy download + Gemini processing) is done OFF the
-    # request path by the analyze_pending_media cron — doing it here would risk
-    # Render's request timeout on long videos. We simply reuse whatever's cached:
-    # if ready, the copy is grounded in what's really in the media; if not, we
-    # generate from the user's text now and it gets richer on a later regenerate
-    # once the cron has analyzed this upload.
-    try:
-        result = ai.generate_metadata(
+        result = ai.fallback_metadata(
             content.platform,
             title=video.user_title,
             description=video.user_description,
             filename=video.original_filename,
             media_type=video.media_type,
             category=video.category,
-            media_analysis=video.ai_media_analysis,
         )
-    except Exception as exc:  # SDK / network / parse — isolate to this platform
-        logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
-        rows.update(generation_status=AIContent.GenStatus.FAILED)
-        return JsonResponse(
-            {"ok": False, "error": "Generation failed — tap regenerate to retry."}, status=200
-        )
+        fallback_notice = "Gemini is not configured, so this draft uses your upload details."
+    else:
+        # Media analysis (the heavy download + Gemini processing) is done OFF the
+        # request path by the analyze_pending_media cron — doing it here would risk
+        # Render's request timeout on long videos. We simply reuse whatever's cached:
+        # if ready, the copy is grounded in what's really in the media; if not, we
+        # generate from the user's text now and it gets richer on a later regenerate
+        # once the cron has analyzed this upload.
+        try:
+            result = ai.generate_metadata(
+                content.platform,
+                title=video.user_title,
+                description=video.user_description,
+                filename=video.original_filename,
+                media_type=video.media_type,
+                category=video.category,
+                media_analysis=video.ai_media_analysis,
+            )
+        except Exception as exc:  # SDK / network / parse — isolate to this platform
+            logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
+            result = ai.fallback_metadata(
+                content.platform,
+                title=video.user_title,
+                description=video.user_description,
+                filename=video.original_filename,
+                media_type=video.media_type,
+                category=video.category,
+            )
+            fallback_notice = "Gemini is temporarily unavailable, so this draft uses your upload details."
 
     rows.update(
         generated_title=result["title"],
@@ -637,10 +662,15 @@ def generate_ai(request, pk):
     # The media analysis (or the user's own note) grounds the copy. Only when
     # NEITHER exists did the model write blind from the filename — say so.
     grounded = video.ai_media_analysis.strip() or video.user_description.strip()
-    notice = "" if grounded else (
-        "Written from the filename only — the AI couldn't watch this file. "
-        "Regenerate to retry, or add a description."
-    )
+    if fallback_notice:
+        notice = fallback_notice
+    elif grounded:
+        notice = ""
+    else:
+        notice = (
+            "Written from the filename only — the AI couldn't watch this file. "
+            "Regenerate to retry, or add a description."
+        )
     return JsonResponse(
         {
             "ok": True,

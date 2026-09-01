@@ -598,3 +598,54 @@ def validate_metadata(platform: str, title: str, description: str, hashtags: str
         violations.append(f"{tag_count} hashtags/tags; max {limits['max_hashtags']}.")
 
     return violations
+
+
+def fallback_metadata(
+    platform: str,
+    title: str = "",
+    description: str = "",
+    filename: str = "",
+    media_type: str = "video",
+    category: str = "",
+) -> dict:
+    """Return a usable draft when Gemini is unavailable or temporarily failing."""
+    if platform not in PLATFORM_LIMITS:
+        raise ValueError(f"Unknown platform: {platform}")
+
+    base_title = (title or filename or "New post").strip()
+    base_description = (description or "").strip()
+    topic = (category or "").strip()
+    subject = topic or base_title
+
+    if not base_description:
+        noun = "image" if media_type == "image" else "video"
+        base_description = f"Sharing this {noun}: {base_title}."
+
+    hashtag_seed = re.findall(r"[A-Za-z0-9]+", subject.lower())
+    hashtag_seed = [w for w in hashtag_seed if len(w) > 2][:4]
+    if not hashtag_seed:
+        hashtag_seed = ["content", "creator"]
+
+    if platform == "youtube":
+        tags = ", ".join(hashtag_seed[:PLATFORM_LIMITS[platform]["max_hashtags"]])
+        return {
+            "title": base_title[:PLATFORM_LIMITS[platform]["title"]],
+            "description": base_description[:PLATFORM_LIMITS[platform]["description"]],
+            "hashtags": tags,
+            "model": "fallback",
+        }
+
+    tags = " ".join(
+        f"#{token}" for token in hashtag_seed[:PLATFORM_LIMITS[platform]["max_hashtags"]]
+    )
+    if platform == "instagram":
+        body = f"{base_title}\n\n{base_description}"
+    else:
+        body = f"{base_title}\n\n{base_description}\n\nWhat would you add?"
+
+    return {
+        "title": base_title[:PLATFORM_LIMITS[platform]["title"]],
+        "description": body[:PLATFORM_LIMITS[platform]["description"]],
+        "hashtags": tags,
+        "model": "fallback",
+    }
