@@ -509,13 +509,10 @@ def regenerate_draft(request, pk):
     content = _get_draft(request, pk)
     if not content:
         return JsonResponse({"detail": "Not found."}, status=404)
-    if not ai.is_configured():
-        return JsonResponse(
-            {"detail": "AI isn't configured (set GEMINI_API_KEY)."}, status=409
-        )
     v = content.video
-    try:
-        meta = ai.generate_metadata(
+    notice = ""
+    if not ai.is_configured():
+        meta = ai.fallback_metadata(
             content.platform,
             title=v.user_title,
             description=v.user_description,
@@ -523,10 +520,29 @@ def regenerate_draft(request, pk):
             media_type=v.media_type,
             category=v.category,
         )
-    except Exception as exc:
-        content.generation_status = AIContent.GenStatus.FAILED
-        content.save(update_fields=["generation_status"])
-        return JsonResponse({"detail": f"Generation failed: {exc}"}, status=502)
+        notice = "Gemini is not configured, so this draft uses your upload details."
+    else:
+        try:
+            meta = ai.generate_metadata(
+                content.platform,
+                title=v.user_title,
+                description=v.user_description,
+                filename=v.original_filename,
+                media_type=v.media_type,
+                category=v.category,
+                media_analysis=v.ai_media_analysis,
+            )
+        except Exception as exc:
+            logger.error("API draft generation failed (%s): %s", content.platform, exc)
+            meta = ai.fallback_metadata(
+                content.platform,
+                title=v.user_title,
+                description=v.user_description,
+                filename=v.original_filename,
+                media_type=v.media_type,
+                category=v.category,
+            )
+            notice = "Gemini is temporarily unavailable, so this draft uses your upload details."
     content.generated_title = meta.get("title", "")
     content.generated_description = meta.get("description", "")
     content.generated_hashtags = meta.get("hashtags", "")
@@ -536,7 +552,10 @@ def regenerate_draft(request, pk):
         "generated_title", "generated_description",
         "generated_hashtags", "ai_model_used", "generation_status",
     ])
-    return JsonResponse(draft_dict(content))
+    data = draft_dict(content)
+    if notice:
+        data["notice"] = notice
+    return JsonResponse(data)
 
 
 def _generate_drafts_async(video_id: int):
@@ -555,7 +574,33 @@ def _generate_drafts_async(video_id: int):
             return
         for c in v.ai_contents.filter(generation_status=AIContent.GenStatus.PENDING):
             try:
-                meta = ai.generate_metadata(
+                if ai.is_configured():
+                    meta = ai.generate_metadata(
+                        c.platform,
+                        title=v.user_title,
+                        description=v.user_description,
+                        filename=v.original_filename,
+                        media_type=v.media_type,
+                        category=v.category,
+                        media_analysis=v.ai_media_analysis,
+                    )
+                else:
+                    meta = ai.fallback_metadata(
+                        c.platform,
+                        title=v.user_title,
+                        description=v.user_description,
+                        filename=v.original_filename,
+                        media_type=v.media_type,
+                        category=v.category,
+                    )
+                c.generated_title = meta.get("title", "")
+                c.generated_description = meta.get("description", "")
+                c.generated_hashtags = meta.get("hashtags", "")
+                c.ai_model_used = meta.get("model", "")
+                c.generation_status = AIContent.GenStatus.DONE
+            except Exception as exc:
+                logger.error("Async draft gen failed (%s): %s", c.platform, exc)
+                meta = ai.fallback_metadata(
                     c.platform,
                     title=v.user_title,
                     description=v.user_description,
@@ -568,9 +613,6 @@ def _generate_drafts_async(video_id: int):
                 c.generated_hashtags = meta.get("hashtags", "")
                 c.ai_model_used = meta.get("model", "")
                 c.generation_status = AIContent.GenStatus.DONE
-            except Exception as exc:
-                logger.error("Async draft gen failed (%s): %s", c.platform, exc)
-                c.generation_status = AIContent.GenStatus.FAILED
             c.save()
         close_old_connections()
 

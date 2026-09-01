@@ -61,6 +61,7 @@ CSRF_TRUSTED_ORIGINS += [FRONTEND_ORIGIN, "http://localhost:3000", "http://127.0
 CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))  # de-dup, keep order
 if RENDER_EXTERNAL_HOSTNAME:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
+CSRF_FAILURE_VIEW = "core.views.csrf_failure"
 
 # When the app runs behind a TLS-terminating proxy (the cloudflared tunnel used
 # for local OAuth testing, or Render in production), trust the forwarded scheme
@@ -208,11 +209,12 @@ WSGI_APPLICATION = "config.wsgi.application"
 # Otherwise fall back to SQLite so the project runs the instant you clone it.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if DATABASE_URL:
+    db_url_lower = DATABASE_URL.lower()
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
             conn_max_age=600,        # reuse connections; Neon likes pooled conns
-            ssl_require=True,        # Neon requires TLS
+            ssl_require=not db_url_lower.startswith("sqlite"),  # Neon requires TLS
         )
     }
 else:
