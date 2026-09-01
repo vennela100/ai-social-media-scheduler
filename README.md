@@ -12,50 +12,55 @@ shared database.
 
 ```mermaid
 flowchart LR
-    User[Creator] --> Browser[Browser]
-    Browser --> Render[Django web app on Render]
-    Browser -- direct large upload --> R2[Cloudflare R2]
-    Render -- small media and thumbnails --> Cloudinary[Cloudinary]
-    Render --> DB[(Neon Postgres)]
-    Render --> Gemini[Google Gemini]
-    Render --> OAuth[YouTube / Instagram / LinkedIn OAuth]
+    creator["Creator"] --> browser["Browser"]
+    browser --> web["Django web app on Render"]
+    browser -->|"Direct large upload"| r2["Cloudflare R2"]
+    web -->|"Small media and thumbnails"| cloudinary["Cloudinary"]
+    web --> db[("Neon Postgres")]
+    web --> gemini["Google Gemini"]
+    web --> oauth["Social platform OAuth"]
 
-    Cron[GitHub Actions or external cron] --> Commands[Django management commands]
-    Commands --> DB
-    Commands --> Gemini
-    Commands --> R2
-    Commands --> Cloudinary
-    Commands --> Platforms[YouTube / Instagram / LinkedIn APIs]
-    Commands --> Alerts[Email / Telegram alerts]
+    cron["GitHub Actions or external cron"] --> commands["Django management commands"]
+    commands --> db
+    commands --> gemini
+    commands --> r2
+    commands --> cloudinary
+    commands --> platforms["YouTube, Instagram, LinkedIn APIs"]
+    commands --> alerts["Email and Telegram alerts"]
 ```
 
 ### Runtime Contexts
 
 ```mermaid
 flowchart TB
-    subgraph Render["Render web service"]
-        Web[Django views and templates]
-        API[Upload, OAuth, AI, schedule, analytics endpoints]
-        WhiteNoise[WhiteNoise static files]
+    subgraph render_service["Render web service"]
+        web_views["Django views and templates"]
+        web_api["Upload, OAuth, AI, schedule, analytics endpoints"]
+        static_files["WhiteNoise static files"]
     end
 
-    subgraph Jobs["Scheduled workers"]
-        Publisher[publish_due_posts]
-        Analyzer[analyze_pending_media]
-        Stats[refresh_stats]
-        Cleanup[cleanup_sources]
+    subgraph scheduled_workers["Scheduled workers"]
+        publisher["publish_due_posts"]
+        analyzer["analyze_pending_media"]
+        stats["refresh_stats"]
+        cleanup["cleanup_sources"]
     end
 
-    subgraph Shared["Shared state"]
-        Postgres[(Postgres or local SQLite)]
-        Media[Cloudinary and R2 media]
+    subgraph shared_state["Shared state"]
+        database[("Postgres or local SQLite")]
+        media["Cloudinary and R2 media"]
     end
 
-    Web --> API
-    API --> Postgres
-    API --> Media
-    Jobs --> Postgres
-    Jobs --> Media
+    web_views --> web_api
+    web_api --> database
+    web_api --> media
+    publisher --> database
+    analyzer --> database
+    stats --> database
+    cleanup --> database
+    publisher --> media
+    analyzer --> media
+    cleanup --> media
 ```
 
 ### Upload, Generate, Schedule Flow
@@ -64,7 +69,7 @@ flowchart TB
 sequenceDiagram
     participant U as Creator
     participant W as Django Web App
-    participant S as Cloudinary / R2
+    participant S as Cloudinary and R2
     participant G as Gemini
     participant D as Database
 
@@ -115,8 +120,8 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
-    USER ||--o{ VIDEO : uploads
-    USER ||--o{ SOCIAL_ACCOUNT : connects
+    APP_USER ||--o{ VIDEO : uploads
+    APP_USER ||--o{ SOCIAL_ACCOUNT : connects
     VIDEO ||--o{ AI_CONTENT : generates
     VIDEO ||--o{ SCHEDULED_POST : schedules
     SOCIAL_ACCOUNT ||--o{ SCHEDULED_POST : publishes_to
@@ -128,15 +133,15 @@ erDiagram
         string file_url
         string thumbnail_url
         string r2_object_key
-        text ai_media_analysis
+        string ai_media_analysis
         string ai_analysis_status
     }
 
     SOCIAL_ACCOUNT {
         string platform
-        encrypted access_token
-        encrypted refresh_token
-        datetime token_expires_at
+        string access_token_encrypted
+        string refresh_token_encrypted
+        string token_expires_at
         string status
     }
 
@@ -149,7 +154,7 @@ erDiagram
     }
 
     SCHEDULED_POST {
-        datetime scheduled_time_utc
+        string scheduled_time_utc
         string visibility
         string status
         string platform_post_id
