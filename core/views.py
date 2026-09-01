@@ -1465,13 +1465,7 @@ def linkedin_disconnect(request):
 
 
 def healthz(request):
-    """Return 200 if the app and database are reachable, else 503."""
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-    except Exception as exc:
-        return JsonResponse({"status": "error", "detail": str(exc)}, status=503)
+    """Return 200 without waking the Neon database compute."""
     return JsonResponse({"status": "ok"})
 
 
