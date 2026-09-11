@@ -260,9 +260,7 @@
 
       // Fire all pending drafts in parallel — each updates its own card.
       function generateAll() {
-        analyzeIfNeeded(pendingCards).finally(function () {
-          pendingCards.forEach(generate);
-        });
+        pendingCards.forEach(generate);
       }
 
       function showAnalysis(text) {
@@ -323,7 +321,7 @@
       document.querySelectorAll("[data-regen]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var card = btn.closest(".draft");
-          analyzeIfNeeded([card]).finally(function () { generate(card); });
+          generate(card);
         });
       });
 
