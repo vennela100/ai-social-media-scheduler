@@ -256,8 +256,6 @@
         form.addEventListener("submit", function (e) {
           var file = fileInput.files && fileInput.files[0];
           if (!file || kind(file.name) !== "video") return;   // images / no file: classic path
-          var classicMaxMb = parseInt(form.dataset.classicVideoMaxMb, 10) || 100;
-          if (file.size <= classicMaxMb * 1024 * 1024) return; // small videos use Django -> Cloudinary
           e.preventDefault();
           if (file.size > parseInt(form.dataset.r2MaxMb, 10) * 1024 * 1024) {
             return fail("This video is " + Math.round(file.size / 1024 / 1024) + " MB; the limit is " + form.dataset.r2MaxMb + " MB.");
