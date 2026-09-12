@@ -95,9 +95,12 @@ def draft_dict(c: AIContent) -> dict:
         "id": c.id,
         "platform": c.platform,
         "title": c.generated_title,
-        "description": c.generated_description,
+        "description": ai.youtube_description(c.generated_description, c.generated_hashtags)
+        if c.platform == "youtube" else c.generated_description,
         "hashtags": c.generated_hashtags,
         "genStatus": c.generation_status,
+        "error": ai.QUOTA_MESSAGES.get(c.generation_error_code, ""),
+        "errorCode": c.generation_error_code,
     }
 
 
@@ -464,6 +467,10 @@ def schedule_draft(request, pk):
     caption = "\n\n".join(
         part for part in (content.generated_description, content.generated_hashtags) if part
     ).strip()
+    if content.platform == "youtube":
+        caption = ai.youtube_description(content.generated_description, content.generated_hashtags)
+        if len(caption) > ai.PLATFORM_LIMITS["youtube"]["description"]:
+            return JsonResponse({"detail": "YouTube description including hashtags must be at most 5000 characters."}, status=400)
     post = ScheduledPost.objects.create(
         video=content.video,
         social_account=account,
@@ -533,6 +540,12 @@ def regenerate_draft(request, pk):
                 media_analysis=v.ai_media_analysis,
             )
         except Exception as exc:
+            quota = ai.quota_error(exc)
+            if quota:
+                content.generation_status = AIContent.GenStatus.FAILED
+                content.generation_error_code = quota.code
+                content.save(update_fields=["generation_status", "generation_error_code"])
+                return JsonResponse({"detail": str(quota), "error": str(quota), "errorCode": quota.code}, status=429)
             logger.error("API draft generation failed (%s): %s", content.platform, exc)
             meta = ai.fallback_metadata(
                 content.platform,
@@ -548,9 +561,10 @@ def regenerate_draft(request, pk):
     content.generated_hashtags = meta.get("hashtags", "")
     content.ai_model_used = meta.get("model", "")
     content.generation_status = AIContent.GenStatus.DONE
+    content.generation_error_code = ""
     content.save(update_fields=[
         "generated_title", "generated_description",
-        "generated_hashtags", "ai_model_used", "generation_status",
+        "generated_hashtags", "ai_model_used", "generation_status", "generation_error_code",
     ])
     data = draft_dict(content)
     if notice:
@@ -599,6 +613,13 @@ def _generate_drafts_async(video_id: int):
                 c.ai_model_used = meta.get("model", "")
                 c.generation_status = AIContent.GenStatus.DONE
             except Exception as exc:
+                quota = ai.quota_error(exc)
+                if quota:
+                    AIContent.objects.filter(video=v, generation_status=AIContent.GenStatus.PENDING).update(
+                        generation_status=AIContent.GenStatus.FAILED, generation_error_code=quota.code,
+                    )
+                    close_old_connections()
+                    return
                 logger.error("Async draft gen failed (%s): %s", c.platform, exc)
                 meta = ai.fallback_metadata(
                     c.platform,

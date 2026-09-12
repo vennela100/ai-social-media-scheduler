@@ -24,6 +24,35 @@ logger = logging.getLogger("scheduler")
 
 GEMINI_MODEL = "gemini-2.5-flash"
 
+QUOTA_MESSAGES = {
+    "daily_quota": "Today's AI quota is completed. Please try again after the daily quota resets.",
+    "rate_limit": "Too many AI requests at once. Please wait a minute and try again.",
+    "quota": "The AI quota or rate limit has been reached. Please try again later or check your Gemini limits.",
+}
+
+
+class QuotaError(Exception):
+    def __init__(self, code="quota"):
+        self.code = code
+        super().__init__(QUOTA_MESSAGES.get(code, QUOTA_MESSAGES["quota"]))
+
+
+def quota_error(exc):
+    """Distinguish daily quotas from short-term limits using Gemini's error details."""
+    if isinstance(exc, QuotaError):
+        return exc
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if str(code) != "429" and getattr(exc, "status", None) != "RESOURCE_EXHAUSTED":
+        return None
+    details = getattr(exc, "details", None)
+    text = json.dumps(details, default=str) if details else str(exc)
+    normalized = re.sub(r"[^a-z0-9]", "", text.lower())
+    if "perday" in normalized or "daily" in normalized or "requestsday" in normalized:
+        return QuotaError("daily_quota")
+    if "perminute" in normalized or "persecond" in normalized:
+        return QuotaError("rate_limit")
+    return QuotaError()
+
 # Caps for the (optional) video-analysis step. Downloading + uploading + waiting
 # for Gemini to process a clip is the slow part, so we bound each piece.
 VIDEO_DOWNLOAD_TIMEOUT = 120       # seconds to pull bytes from Cloudinary
@@ -231,6 +260,36 @@ def _format_tags(platform: str, tokens: list[str]) -> str:
     return " ".join(f"#{t}" for t in tokens)
 
 
+def youtube_description(description: str, tags, *, limit=None) -> str:
+    """Append up to three visible hashtags while retaining separate YouTube tags."""
+    if isinstance(tags, (list, tuple)):
+        items = tags
+    else:
+        raw = str(tags or "")
+        items = raw.split(",") if "," in raw else raw.split()
+    hashtags = []
+    seen = set()
+    for item in items:
+        token = re.sub(r"[^\w]", "", str(item))[:60]
+        if token and token.casefold() not in seen:
+            seen.add(token.casefold())
+            hashtags.append("#" + token)
+        if len(hashtags) == 3:
+            break
+    body = (description or "").strip()
+
+    def append_missing(text):
+        existing = {tag.casefold() for tag in re.findall(r"(?<!\w)#\w+", text)}
+        missing = [tag for tag in hashtags if tag.casefold() not in existing]
+        return "\n\n".join(part for part in (text, " ".join(missing)) if part)
+
+    result = append_missing(body)
+    if limit is not None and len(result) > limit:
+        reserve = len(" ".join(hashtags)) + 2 if hashtags else 0
+        result = append_missing(body[:max(0, limit - reserve)].rstrip())
+    return result
+
+
 def _normalize(platform: str, data: dict) -> tuple[str, str, str]:
     """Map a platform's JSON keys onto (title, description, hashtags)."""
     if platform == "youtube":
@@ -252,18 +311,19 @@ def upload_for_analysis(video_url: str):
     """
     if not video_url:
         return None
+    gfile = None
+    ready = False
     try:
         client = _client()
-        resp = requests.get(video_url, timeout=VIDEO_DOWNLOAD_TIMEOUT, stream=True)
-        resp.raise_for_status()
-
         suffix = os.path.splitext(video_url.split("?")[0])[1] or ".mp4"
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                for chunk in resp.iter_content(chunk_size=1 << 20):
-                    tmp.write(chunk)
-                tmp_path = tmp.name
+            with requests.get(video_url, timeout=VIDEO_DOWNLOAD_TIMEOUT, stream=True) as resp:
+                resp.raise_for_status()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp_path = tmp.name
+                    for chunk in resp.iter_content(chunk_size=1 << 20):
+                        tmp.write(chunk)
 
             gfile = client.files.upload(file=tmp_path)
         finally:
@@ -280,10 +340,17 @@ def upload_for_analysis(video_url: str):
             logger.warning("Gemini video not ready (state=%s); using brief only", gfile.state.name)
             return None
         logger.info("Video uploaded to Gemini for analysis: %s", gfile.name)
+        ready = True
         return gfile
     except Exception as exc:  # download / SDK / timeout — degrade gracefully
+        quota = quota_error(exc)
+        if quota:
+            raise quota from exc
         logger.warning("Video analysis unavailable, falling back to brief: %s", exc)
         return None
+    finally:
+        if gfile is not None and not ready:
+            cleanup_analysis(gfile)
 
 
 def cleanup_analysis(gfile) -> None:
@@ -336,6 +403,9 @@ def _generate_with_retry(client, **kwargs):
         try:
             return client.models.generate_content(**kwargs)
         except Exception as exc:
+            quota = quota_error(exc)
+            if quota:
+                raise quota from exc
             remaining = deadline - time.time()
             if attempt == GENERATE_MAX_ATTEMPTS or not _is_transient_overload(exc):
                 raise
@@ -397,11 +467,14 @@ def generate_metadata(platform: str, title: str = "", description: str = "", fil
     # Belt-and-braces: trim to platform limits even though the prompt asks within
     # them, so a slightly over-eager model can't produce an unschedulable draft.
     tokens = _split_tags(raw_tags)[: limits["max_hashtags"]]
+    description = (out_desc or "").strip()[: limits["description"]]
+    if platform == "youtube":
+        description = youtube_description(description, tokens, limit=limits["description"])
 
     logger.info("Generated %s metadata via %s", platform, GEMINI_MODEL)
     return {
         "title": (out_title or "").strip()[: limits["title"]],
-        "description": (out_desc or "").strip()[: limits["description"]],
+        "description": description,
         "hashtags": _format_tags(platform, tokens),
         "model": GEMINI_MODEL,
     }
@@ -411,12 +484,12 @@ def _analyze_image(client, image_url: str) -> str:
     """Fetch an image and ask Gemini to describe it inline (no Files API needed)."""
     from google.genai import types
 
-    resp = requests.get(image_url, timeout=VIDEO_DOWNLOAD_TIMEOUT)
-    resp.raise_for_status()
-    mime = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
-    if not mime.startswith("image/"):
-        mime = "image/jpeg"  # sensible default when Cloudinary omits the header
-    part = types.Part.from_bytes(data=resp.content, mime_type=mime)
+    with requests.get(image_url, timeout=VIDEO_DOWNLOAD_TIMEOUT) as resp:
+        resp.raise_for_status()
+        mime = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+        if not mime.startswith("image/"):
+            mime = "image/jpeg"
+        part = types.Part.from_bytes(data=resp.content, mime_type=mime)
     response = _generate_with_retry(
         client, model=GEMINI_MODEL,
         contents=[part, MEDIA_ANALYSIS_PROMPT.format(media="image")],
@@ -483,6 +556,9 @@ def analyze_media(video) -> str:
         else:
             text = _analyze_video(client, video.file_url)
     except Exception as exc:  # download / SDK / parse — degrade to text-only
+        quota = quota_error(exc)
+        if quota:
+            raise quota from exc
         logger.warning(
             "Media analysis failed for video %s, using text only: %s",
             getattr(video, "pk", "?"), exc,
@@ -603,6 +679,8 @@ def validate_metadata(platform: str, title: str, description: str, hashtags: str
         return [f"Unknown platform: {platform}"]
 
     violations = []
+    if platform == "youtube":
+        description = youtube_description(description, hashtags)
     if len(title) > limits["title"]:
         violations.append(f"Title is {len(title)} chars; max {limits['title']}.")
     if len(description) > limits["description"]:
@@ -645,7 +723,7 @@ def fallback_metadata(
         tags = ", ".join(hashtag_seed[:PLATFORM_LIMITS[platform]["max_hashtags"]])
         return {
             "title": base_title[:PLATFORM_LIMITS[platform]["title"]],
-            "description": base_description[:PLATFORM_LIMITS[platform]["description"]],
+            "description": youtube_description(base_description, tags, limit=PLATFORM_LIMITS[platform]["description"]),
             "hashtags": tags,
             "model": "fallback",
         }

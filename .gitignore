@@ -26,3 +26,4 @@ Thumbs.db
 
 # --- Local tooling ---
 .claude/settings.local.json
+.local-check/
