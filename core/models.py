@@ -133,6 +133,7 @@ class Video(models.Model):
         # driven off the request path by the analyze_pending_media cron so the web
         # app never blocks on a slow download/upload.
         PENDING = "pending", "Pending"    # uploaded, not yet analyzed
+        PROCESSING = "processing", "Processing"
         DONE = "done", "Done"             # ai_media_analysis is populated
         SKIPPED = "skipped", "Skipped"    # too large/long, or nothing to analyze
         FAILED = "failed", "Failed"       # analysis attempted and errored
@@ -177,6 +178,8 @@ class Video(models.Model):
     ai_analysis_status = models.CharField(
         max_length=10, choices=AnalysisStatus.choices, default=AnalysisStatus.PENDING
     )
+    ai_analysis_started_at = models.DateTimeField(null=True, blank=True)
+    ai_analysis_error_code = models.CharField(max_length=32, blank=True, default="")
     # Video length in whole seconds (from Cloudinary); 0 for images or when unknown.
     # Paired with source_size_bytes to cap what we send for analysis.
     duration_seconds = models.PositiveIntegerField(default=0)
@@ -223,6 +226,7 @@ class AIContent(models.Model):
     generation_status = models.CharField(
         max_length=10, choices=GenStatus.choices, default=GenStatus.DONE
     )
+    generation_error_code = models.CharField(max_length=32, blank=True, default="")
     generated_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:

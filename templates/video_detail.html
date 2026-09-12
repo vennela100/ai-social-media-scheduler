@@ -93,6 +93,7 @@
         <div class="draft-grid reveal" id="drafts"
              data-analyze-url="{% url 'core:analyze_media' video.pk %}"
              data-analysis-status="{{ video.ai_analysis_status }}"
+             data-has-description="{{ has_description|yesno:'1,0' }}"
              data-media-type="{{ video.media_type }}">
       {% for d in drafts %}
         {% with c=d.content %}
@@ -113,7 +114,7 @@
           </div>
 
           <div class="gen-status" data-spinner hidden><span class="spinner"></span> <span data-spinner-msg>Writing your copy…</span></div>
-          <div class="msg error gen-error" data-error hidden style="margin:0 0 12px;"><span></span></div>
+          <div class="msg error gen-error" data-error {% if not d.error %}hidden{% endif %} style="margin:0 0 12px;"><span>{{ d.error }}</span></div>
           <div class="gen-notice" data-notice hidden></div>
 
           <form method="post" action="{% url 'core:schedule_content' c.pk %}" class="draft-body" data-body>
@@ -122,7 +123,7 @@
               <label class="fld-label">Title <span class="lim">≤ {{ d.limits.title }}</span></label>
               <input class="fld" type="text" name="title" maxlength="{{ d.limits.title }}" value="{{ c.generated_title }}">
               <label class="fld-label">Description <span class="lim">≤ {{ d.limits.description }}</span></label>
-              <textarea class="fld" name="description" rows="7">{{ c.generated_description }}</textarea>
+              <textarea class="fld" name="description" rows="7">{{ d.description }}</textarea>
               <label class="fld-label">Tags <span class="lim">≤ {{ d.limits.max_hashtags }}</span></label>
               <textarea class="fld" name="hashtags" rows="2">{{ c.generated_hashtags }}</textarea>
             {% else %}
@@ -210,6 +211,8 @@
 
       function setState(card, state, msg) {
         card.dataset.status = state;
+        var regenerate = card.querySelector("[data-regen]");
+        if (regenerate) regenerate.disabled = state === "pending";
         var spin = card.querySelector("[data-spinner]");
         spin.hidden = state !== "pending";
         if (state === "pending") {
@@ -258,11 +261,6 @@
       var pendingCards = Array.prototype.slice.call(
         document.querySelectorAll('.draft[data-status="pending"]'));
 
-      // Fire all pending drafts in parallel — each updates its own card.
-      function generateAll() {
-        pendingCards.forEach(generate);
-      }
-
       function showAnalysis(text) {
         var box = document.querySelector("[data-analysis]");
         if (!box) return;
@@ -270,58 +268,70 @@
         box.hidden = false;
       }
 
-      // Analysis-first: if the media hasn't been watched yet, run the one-time
-      // Gemini analysis BEFORE generating, so every draft is grounded in what's
-      // actually in the file (no typed description needed). Fail-open: any
-      // problem falls straight through to text-only generation, and the
-      // analyze_pending_media cron retries later.
+      // Share one analysis job across platforms, then generate their drafts.
       var analysisStatus = grid ? grid.dataset.analysisStatus : "done";
       var analysisPromise = null;
       function needsAnalysis() {
-        return grid && (
-          analysisStatus === "pending" ||
-          analysisStatus === "failed" ||
-          analysisStatus === "skipped"
-        );
+        return grid && analysisStatus !== "done";
       }
       function analyzeIfNeeded(cards) {
         if (!needsAnalysis()) return Promise.resolve();
         var watching = "Watching your " + (grid.dataset.mediaType || "video") + "...";
         (cards || []).forEach(function (card) { setState(card, "pending", watching); });
         if (!analysisPromise) {
-          analysisPromise = fetch(grid.dataset.analyzeUrl, { method: "POST", headers: { "X-CSRFToken": csrftoken } })
-            .then(function (r) { return r.text(); })
-            .then(function (t) {
-              var d; try { d = JSON.parse(t); } catch (e) { d = null; }
-              if (d && d.ok && d.analysis) {
-                showAnalysis(d.analysis);
-                analysisStatus = "done";
-                grid.dataset.analysisStatus = "done";
-              }
+          var deadline = Date.now() + 20 * 60 * 1000;
+          function poll(retry) {
+            var controller = new AbortController();
+            var timer = setTimeout(function () { controller.abort(); }, 30000);
+            return fetch(grid.dataset.analyzeUrl, {
+              method: "POST", signal: controller.signal,
+              headers: { "X-CSRFToken": csrftoken, "Content-Type": "application/x-www-form-urlencoded" },
+              body: retry ? "retry=1" : ""
             })
-            .catch(function () {});
+              .then(function (r) {
+                if (r.redirected || r.status === 403) throw new Error("Your session expired. Refresh the page and try again.");
+                if (!r.ok) throw new Error("Video analysis is unavailable. Regenerate to retry.");
+                return r.json();
+              })
+              .finally(function () { clearTimeout(timer); })
+              .then(function (d) {
+                if (!d.ok) {
+                  var error = new Error(d.error || "Couldn't analyze this file. Regenerate to retry.");
+                  error.code = d.error_code;
+                  throw error;
+                }
+                if (d.analysis) {
+                  showAnalysis(d.analysis);
+                  analysisStatus = "done";
+                  grid.dataset.analysisStatus = "done";
+                  return;
+                }
+                if (Date.now() >= deadline) throw new Error("Analysis is taking too long. Regenerate to check again.");
+                if (d.status !== "pending" && d.status !== "processing") throw new Error("No video analysis was returned. Regenerate to retry.");
+                return new Promise(function (resolve) { setTimeout(resolve, 3000); })
+                  .then(function () { return poll(false); });
+              });
+          }
+          analysisPromise = poll(true).finally(function () { analysisPromise = null; });
         }
         return analysisPromise;
       }
-      if (false && grid && pendingCards.length && (analysisStatus === "pending" || analysisStatus === "failed")) {
-        var watching = "Watching your " + (grid.dataset.mediaType || "video") + "…";
-        pendingCards.forEach(function (card) { setState(card, "pending", watching); });
-        fetch(grid.dataset.analyzeUrl, { method: "POST", headers: { "X-CSRFToken": csrftoken } })
-          .then(function (r) { return r.text(); })
-          .then(function (t) {
-            var d; try { d = JSON.parse(t); } catch (e) { d = null; }
-            if (d && d.ok && d.analysis) showAnalysis(d.analysis);
+      function prepareAndGenerate(cards) {
+        if (!cards.length) return;
+        analyzeIfNeeded(cards)
+          .then(function () { cards.forEach(generate); })
+          .catch(function (error) {
+            if (grid.dataset.hasDescription === "1" && !error.code) cards.forEach(generate);
+            else cards.forEach(function (card) { setState(card, "failed", error.message || "Couldn't analyze this file. Regenerate to retry."); });
           })
-          .catch(function () {})
-          .finally(generateAll);
-      } else {
-        generateAll();
       }
+      prepareAndGenerate(pendingCards);
       // Manual regenerate.
       document.querySelectorAll("[data-regen]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var card = btn.closest(".draft");
-          generate(card);
+          if (card.dataset.status === "pending") return;
+          prepareAndGenerate([card]);
         });
       });
 

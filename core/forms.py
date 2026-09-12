@@ -104,11 +104,13 @@ class VideoUploadForm(forms.Form):
     )
     title = forms.CharField(
         label="Title (optional)",
+        max_length=255,
         required=False,
         help_text="Leave blank to use the filename.",
     )
     category = forms.CharField(
         label="Category / niche (optional)",
+        max_length=100,
         required=False,
         help_text="e.g. fitness, tech tutorials, cooking — helps the AI pick the right keywords.",
         widget=forms.TextInput(attrs={"placeholder": "fitness, tech, education…"}),

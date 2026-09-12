@@ -28,6 +28,7 @@
         data-classic-video-max-mb="{{ video_max_mb }}"
         data-presign-url="{% url 'core:upload_presign' %}">
     {% csrf_token %}
+    {{ form.non_field_errors }}
 
     <!-- Left: drag-drop + live preview -->
     <div>
@@ -62,10 +63,12 @@
       <div class="field">
         <label for="{{ form.title.id_for_label }}">Title <span style="color:var(--text-faint);font-weight:400;">· optional</span></label>
         {{ form.title }}
+        {{ form.title.errors }}
       </div>
       <div class="field">
         <label for="{{ form.category.id_for_label }}">Category / niche</label>
         {{ form.category }}
+        {{ form.category.errors }}
       </div>
       <div class="field">
         <label for="{{ form.description.id_for_label }}">What's it about?</label>
@@ -81,6 +84,7 @@
       <div class="field platform-pick">
         <label>Publish to</label>
         {{ form.platforms }}
+        {{ form.platforms.errors }}
       </div>
 
       <div class="form-actions">
@@ -107,6 +111,7 @@
       var dropzone = document.getElementById("dropzone");
       var dzTitle = document.getElementById("dz-title");
       var removeBtn = document.getElementById("dz-remove");
+      var previewUrl = null;
 
       function kind(name) {
         var ext = (name.split(".").pop() || "").toLowerCase();
@@ -123,6 +128,13 @@
       }
 
       function render() {
+        var previousVideo = box.querySelector("video");
+        if (previousVideo) {
+          previousVideo.pause();
+          previousVideo.removeAttribute("src");
+          previousVideo.load();
+        }
+        if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
         box.innerHTML = "";
         var file = fileInput.files && fileInput.files[0];
         if (!file) {
@@ -138,16 +150,16 @@
         if (dzTitle) dzTitle.textContent = file.name;
         if (removeBtn) removeBtn.hidden = false;
         var k = kind(file.name);
-        var url = URL.createObjectURL(file);
+        if (k === "image" || k === "video") previewUrl = URL.createObjectURL(file);
         if (k === "image") {
           var img = document.createElement("img");
-          img.src = url; box.appendChild(img);
+          img.src = previewUrl; box.appendChild(img);
           label.textContent = "Image preview";
           setYouTube(false);
           warning.hidden = false;          // image + YouTube not allowed
         } else if (k === "video") {
           var vid = document.createElement("video");
-          vid.src = url; vid.controls = true; box.appendChild(vid);
+          vid.src = previewUrl; vid.controls = true; box.appendChild(vid);
           label.textContent = "Video preview";
           setYouTube(true);
           warning.hidden = true;
@@ -199,18 +211,49 @@
 
       function setProgress(label) { submitBtn.textContent = label; }
 
+      function finishUpload(response) {
+        if (response.status === 403) {
+          throw new Error("Your session expired. Refresh the page and try again.");
+        }
+        if (!response.ok) {
+          throw new Error("The server couldn't complete the upload (HTTP " + response.status + "). Please try again shortly.");
+        }
+        if (response.redirected) {
+          window.location.assign(response.url);
+          return;
+        }
+        // A rejected POST renders the form with errors. Keep the selected file
+        // and show those errors instead of replacing them with a fresh GET.
+        return response.text().then(function (html) {
+          var page = new DOMParser().parseFromString(html, "text/html");
+          var errors = Array.from(page.querySelectorAll(".toast.error span, .errorlist li"))
+            .map(function (el) { return el.textContent.trim(); })
+            .filter(Boolean);
+          throw new Error(errors.join("\n") || "Upload wasn't completed. Check your file and try again.");
+        });
+      }
+
       // Grab one frame (~0.5s in) as a small JPEG for the dashboard thumbnail.
       // Best-effort with a timeout: a video with no preview is annoying, not
       // broken, so any failure resolves null and the upload continues.
       function captureFrame(file) {
         return new Promise(function (resolve) {
-          var done = false;
-          function finish(blob) { if (!done) { done = true; URL.revokeObjectURL(v.src); resolve(blob || null); } }
+          var done = false, timer;
           var v = document.createElement("video");
+          var objectUrl = URL.createObjectURL(file);
+          function finish(blob) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            v.pause(); v.removeAttribute("src"); v.load();
+            URL.revokeObjectURL(objectUrl);
+            resolve(blob || null);
+          }
           v.muted = true; v.playsInline = true; v.preload = "auto";
-          v.src = URL.createObjectURL(file);
+          v.src = objectUrl;
           v.addEventListener("loadeddata", function () { try { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); } catch (e) { finish(null); } });
           v.addEventListener("seeked", function () {
+            if (done) return;
             try {
               var scale = Math.min(1, 640 / (v.videoWidth || 640));
               var c = document.createElement("canvas");
@@ -221,7 +264,7 @@
             } catch (e) { finish(null); }
           });
           v.addEventListener("error", function () { finish(null); });
-          setTimeout(function () { finish(null); }, 4000);
+          timer = setTimeout(function () { finish(null); }, 4000);
         });
       }
 
@@ -244,11 +287,21 @@
       function videoDuration(file) {
         return new Promise(function (resolve) {
           var v = document.createElement("video");
+          var done = false, timer;
+          var objectUrl = URL.createObjectURL(file);
+          function finish(duration) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            v.removeAttribute("src"); v.load();
+            URL.revokeObjectURL(objectUrl);
+            resolve(isFinite(duration) ? duration : 0);
+          }
           v.preload = "metadata";
-          v.src = URL.createObjectURL(file);
-          v.addEventListener("loadedmetadata", function () { var d = v.duration; URL.revokeObjectURL(v.src); resolve(isFinite(d) ? d : 0); });
-          v.addEventListener("error", function () { resolve(0); });
-          setTimeout(function () { resolve(0); }, 3000);
+          v.src = objectUrl;
+          v.addEventListener("loadedmetadata", function () { finish(v.duration); });
+          v.addEventListener("error", function () { finish(0); });
+          timer = setTimeout(function () { finish(0); }, 3000);
         });
       }
 
@@ -270,12 +323,18 @@
           presignBody.append("csrfmiddlewaretoken", form.querySelector('[name="csrfmiddlewaretoken"]').value);
 
           var key = null, duration = 0, thumbBlob = null;
-          Promise.all([captureFrame(file), videoDuration(file)])
+          var customThumb = form.querySelector('[name="thumbnail_image"]');
+          var frame = customThumb && customThumb.files.length ? Promise.resolve(null) : captureFrame(file);
+          Promise.all([frame, videoDuration(file)])
             .then(function (pre) {
               thumbBlob = pre[0]; duration = pre[1];
               return fetch(form.dataset.presignUrl, { method: "POST", body: presignBody });
             })
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+              if (r.redirected || r.status === 403) throw new Error("Your session expired. Refresh the page and try again.");
+              if (!r.ok) throw new Error("Couldn't prepare the upload (HTTP " + r.status + "). Please try again shortly.");
+              return r.json();
+            })
             .then(function (d) {
               if (!d.ok) throw new Error(d.error || "Couldn't prepare the upload.");
               key = d.key;
@@ -292,7 +351,7 @@
               if (thumbBlob) body.append("thumb", thumbBlob, "thumb.jpg");
               return fetch(form.action || window.location.href, { method: "POST", body: body });
             })
-            .then(function (r) { window.location.assign(r.url); })
+            .then(finishUpload)
             .catch(function (err) { fail(err.message || "Upload failed. Please try again."); });
         });
       }
@@ -303,20 +362,9 @@
           if (!file || kind(file.name) !== "video") return;
           e.preventDefault();
           submitBtn.disabled = true;
-          setProgress("Preparing...");
-          var frameBlob = null;
-          captureFrame(file)
-            .then(function (frame) {
-              frameBlob = frame;
-              return null;
-            })
-            .then(function () {
-              setProgress("Uploading...");
-              var body = new FormData(form);
-              if (frameBlob) body.append("thumb", frameBlob, "thumb.jpg");
-              return fetch(form.action || window.location.href, { method: "POST", body: body });
-            })
-            .then(function (r) { window.location.assign(r.url); })
+          setProgress("Uploading...");
+          fetch(form.action || window.location.href, { method: "POST", body: new FormData(form) })
+            .then(finishUpload)
             .catch(function (err) { fail(err.message || "Upload failed. Please try again."); });
         });
       }

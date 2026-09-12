@@ -12,7 +12,6 @@ from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection
 from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -22,7 +21,7 @@ from django.utils.crypto import get_random_string
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 
-from . import ai, analytics, instagram, linkedin, publishing, r2, stats, youtube
+from . import ai, analytics, instagram, linkedin, media_analysis, publishing, r2, stats, youtube
 from .forms import (
     AIContentForm,
     GenerateMetadataForm,
@@ -453,8 +452,8 @@ def upload(request):
                     # Cloudinary key not set yet — tell the user plainly, don't 500.
                     messages.error(request, f"Upload service not ready: {exc}")
                     return render(request, "upload.html", _upload_context(form))
-                except Exception as exc:  # network / Cloudinary error
-                    logger.error("Video upload failed: %s", exc)
+                except Exception:  # network / Cloudinary error
+                    logger.exception("Video upload failed for user %s", request.user.pk)
                     messages.error(request, "Upload failed. Please try again.")
                     return render(request, "upload.html", _upload_context(form))
 
@@ -530,6 +529,9 @@ def video_detail(request, pk):
     drafts = [
         {
             "content": c,
+            "error": ai.QUOTA_MESSAGES.get(c.generation_error_code, ""),
+            "description": ai.youtube_description(c.generated_description, c.generated_hashtags)
+            if c.platform == "youtube" else c.generated_description,
             "limits": ai.PLATFORM_LIMITS.get(c.platform, {}),
             "connected": c.platform in connected,
             "media_ok": not (video.media_type == "image" and c.platform not in IMAGE_PLATFORMS),
@@ -555,14 +557,7 @@ def video_detail(request, pk):
 @require_POST
 @login_required
 def analyze_media(request, pk):
-    """Have Gemini watch this upload NOW, so the review page can ground every
-    platform draft in the media itself before generating — the analysis IS the
-    description; the user doesn't have to type one.
-
-    Same 200-JSON contract as generate_ai. Fail-open: on any failure the page
-    just generates from the user's text, and the analyze_pending_media cron
-    remains the retry path — this endpoint never hard-fails the flow.
-    """
+    """Start analysis or poll its result without holding an HTTP request open."""
     video = get_object_or_404(Video, pk=pk, user=request.user)
     Status = Video.AnalysisStatus
     rows = Video.objects.filter(pk=video.pk)
@@ -580,18 +575,18 @@ def analyze_media(request, pk):
     if reason:
         rows.update(ai_analysis_status=Status.SKIPPED)
         logger.info("Skipping analysis of video %s: %s", video.pk, reason)
-        return JsonResponse({"ok": True, "status": "skipped"})
-    if video.ai_analysis_status == Status.SKIPPED:
-        rows.update(ai_analysis_status=Status.PENDING)
-
-    text = ai.analyze_media(video)  # caches on success, "" on any failure (logged)
-    rows.update(ai_analysis_status=Status.DONE if text else Status.FAILED)
-    if text:
-        return JsonResponse({"ok": True, "status": "done", "analysis": text})
-    return JsonResponse(
-        {"ok": False, "status": "failed",
-         "error": "Couldn't analyze the file — generating from your text instead."}
-    )
+        return JsonResponse({"ok": False, "status": "skipped", "error": f"Cannot analyze this file: {reason}."})
+    if video.ai_analysis_status == Status.FAILED and request.POST.get("retry") != "1":
+        return JsonResponse({"ok": False, "status": "failed",
+                             "error_code": video.ai_analysis_error_code,
+                             "error": ai.QUOTA_MESSAGES.get(video.ai_analysis_error_code)
+                             or "Couldn't analyze this file. Regenerate to retry, or add a description."})
+    try:
+        status = media_analysis.start(video)
+    except Exception:
+        logger.exception("Couldn't start analysis for video %s", video.pk)
+        return JsonResponse({"ok": False, "status": "failed", "error": "Couldn't start video analysis. Please retry."})
+    return JsonResponse({"ok": True, "status": status})
 
 
 @require_POST
@@ -605,30 +600,29 @@ def generate_ai(request, pk):
     content = get_object_or_404(AIContent, pk=pk, video__user=request.user)
     video = content.video
 
+    if not video.ai_media_analysis.strip() and not video.user_description.strip():
+        return JsonResponse({"ok": False, "error": "Video analysis is required before generating. Regenerate to analyze this file, or add a description."})
+
     # We persist with QuerySet.update() (a pure UPDATE) instead of content.save().
     # save() falls back to an INSERT if the row vanished mid-request (e.g. the
     # user deleted the video while it was generating), which then trips the FK.
     # update() just touches 0 rows in that case — no crash.
     rows = AIContent.objects.filter(pk=content.pk)
     fallback_notice = ""
+    fallback_description = video.user_description or video.ai_media_analysis
 
     if not ai.is_configured():
         result = ai.fallback_metadata(
             content.platform,
             title=video.user_title,
-            description=video.user_description,
+            description=fallback_description,
             filename=video.original_filename,
             media_type=video.media_type,
             category=video.category,
         )
         fallback_notice = "Gemini is not configured, so this draft uses your upload details."
     else:
-        # Media analysis (the heavy download + Gemini processing) is done OFF the
-        # request path by the analyze_pending_media cron — doing it here would risk
-        # Render's request timeout on long videos. We simply reuse whatever's cached:
-        # if ready, the copy is grounded in what's really in the media; if not, we
-        # generate from the user's text now and it gets richer on a later regenerate
-        # once the cron has analyzed this upload.
+        # The review page waits for the background analysis before requesting drafts.
         try:
             result = ai.generate_metadata(
                 content.platform,
@@ -640,11 +634,15 @@ def generate_ai(request, pk):
                 media_analysis=video.ai_media_analysis,
             )
         except Exception as exc:  # SDK / network / parse — isolate to this platform
+            quota = ai.quota_error(exc)
+            if quota:
+                rows.update(generation_status=AIContent.GenStatus.FAILED, generation_error_code=quota.code)
+                return JsonResponse({"ok": False, "error": str(quota), "error_code": quota.code})
             logger.error("Generation failed for %s (AIContent %s): %s", content.platform, pk, exc)
             result = ai.fallback_metadata(
                 content.platform,
                 title=video.user_title,
-                description=video.user_description,
+                description=fallback_description,
                 filename=video.original_filename,
                 media_type=video.media_type,
                 category=video.category,
@@ -657,20 +655,15 @@ def generate_ai(request, pk):
         generated_hashtags=result["hashtags"],
         ai_model_used=result["model"],
         generation_status=AIContent.GenStatus.DONE,
+        generation_error_code="",
     )
 
-    # The media analysis (or the user's own note) grounds the copy. Only when
-    # NEITHER exists did the model write blind from the filename — say so.
-    grounded = video.ai_media_analysis.strip() or video.user_description.strip()
     if fallback_notice:
         notice = fallback_notice
-    elif grounded:
+    elif video.ai_media_analysis.strip():
         notice = ""
     else:
-        notice = (
-            "Written from the filename only — the AI couldn't watch this file. "
-            "Regenerate to retry, or add a description."
-        )
+        notice = "Generated from your description; video analysis is unavailable."
     return JsonResponse(
         {
             "ok": True,
@@ -861,12 +854,11 @@ def _parse_schedule_time(request):
 def _final_caption(content):
     """Assemble the caption stored on the post from the (edited) draft fields.
 
-    YouTube publishes title/description/tags separately, so its caption is just
-    the description. Instagram/LinkedIn take one text blob, so we append the
-    hashtags below the body.
+    YouTube keeps its keyword tags separate and includes visible hashtags in
+    the description. Instagram/LinkedIn append their hashtags below the body.
     """
     if content.platform == "youtube":
-        return content.generated_description
+        return ai.youtube_description(content.generated_description, content.generated_hashtags)
     parts = [p for p in (content.generated_description, content.generated_hashtags) if p]
     return "\n\n".join(parts)
 
@@ -1052,6 +1044,9 @@ def suggest_times(request, pk):
     try:
         slots = ai.suggest_post_times(content.platform, category=content.video.category)
     except Exception as exc:
+        quota = ai.quota_error(exc)
+        if quota:
+            return JsonResponse({"ok": False, "error": str(quota), "error_code": quota.code})
         logger.warning("suggest_times failed for ai %s: %s", pk, exc)
         return JsonResponse({
             "ok": True,

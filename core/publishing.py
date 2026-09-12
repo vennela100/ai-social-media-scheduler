@@ -19,6 +19,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
 from . import instagram, linkedin, r2, storage, youtube
+from .ai import youtube_description
 from .models import ScheduledPost, SocialAccount, Video
 from .notifications import notify_failure, notify_skipped, notify_success
 
@@ -54,6 +55,7 @@ def _publish_youtube(post: ScheduledPost) -> str:
     if ai and ai.generated_title:
         title = ai.generated_title
         description = post.final_caption or ai.generated_description
+        description = youtube_description(description, ai.generated_hashtags, limit=5000)
         # Tags may be comma- or space-separated, with or without '#'.
         tags = [t.strip().lstrip("#") for t in re.split(r"[,\n\s]+", ai.generated_hashtags or "") if t.strip().strip("#")]
     else:

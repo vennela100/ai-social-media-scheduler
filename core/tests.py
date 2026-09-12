@@ -1,8 +1,12 @@
 import datetime as dt
+import threading
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -11,6 +15,193 @@ from .models import AIContent, Platform, ScheduledPost, SocialAccount, Video
 
 
 TEST_FERNET_KEY = "wUzBpLYlGyqfcbtNFHoTcL5Txj4YYllXatTpvFg84bo="
+
+
+@override_settings(
+    DEBUG=False,
+    ALLOWED_HOSTS=["testserver"],
+    CLOUDINARY_URL="",
+    GEMINI_API_KEY="",
+)
+class UploadFlowTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        static_dir = TemporaryDirectory()
+        cls.addClassCleanup(static_dir.cleanup)
+        settings_override = override_settings(STATIC_ROOT=static_dir.name)
+        settings_override.enable()
+        cls.addClassCleanup(settings_override.disable)
+        call_command("collectstatic", interactive=False, verbosity=0)
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="creator@example.com", password="test-password-123"
+        )
+        self.client.force_login(self.user)
+
+    def upload(self, **overrides):
+        data = {
+            "video": SimpleUploadedFile("demo.mp4", b"test video", content_type="video/mp4"),
+            "title": "Demo",
+            "category": "Education",
+            "description": "A tutorial about testing uploads.",
+            "platforms": [Platform.YOUTUBE],
+        }
+        data.update(overrides)
+        return self.client.post(reverse("core:upload"), data, follow=True)
+
+    def test_login_with_csrf_redirects_to_dashboard(self):
+        client = Client(enforce_csrf_checks=True)
+        self.assertEqual(client.get(reverse("login")).status_code, 200)
+        response = client.post(reverse("login"), {
+            "username": "CREATOR@example.com",
+            "password": "test-password-123",
+            "csrfmiddlewaretoken": client.cookies["csrftoken"].value,
+        }, follow=True)
+        self.assertRedirects(response, reverse("core:dashboard"))
+
+    @patch("core.views.upload_media")
+    def test_overlong_fields_are_rejected_before_upload(self, upload_media):
+        for field, limit in (("title", 255), ("category", 100)):
+            with self.subTest(field=field):
+                response = self.upload(**{field: "x" * (limit + 1)})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(field, response.context["form"].errors)
+                self.assertContains(response, f"at most {limit} characters")
+        upload_media.assert_not_called()
+        self.assertFalse(Video.objects.exists())
+
+    @patch("core.views.upload_media", side_effect=RuntimeError("storage unavailable"))
+    def test_storage_failure_renders_error_without_creating_video(self, upload_media):
+        response = self.upload()
+        self.assertContains(response, "Upload failed. Please try again.")
+        self.assertFalse(Video.objects.exists())
+
+    @patch("core.views.upload_media")
+    def test_upload_review_and_generation(self, upload_media):
+        upload_media.return_value = {
+            "file_url": "https://example.com/demo.mp4",
+            "thumbnail_url": "https://example.com/demo.jpg",
+            "original_filename": "demo.mp4",
+            "public_id": "demo",
+        }
+        response = self.upload(title="x" * 255, category="x" * 100)
+        video = Video.objects.get(user=self.user)
+        self.assertRedirects(response, reverse("core:video_detail", args=[video.pk]))
+        draft = video.ai_contents.get()
+        self.assertEqual(draft.generation_status, AIContent.GenStatus.PENDING)
+
+        metadata = {"title": "Generated title", "description": "Generated caption",
+                    "hashtags": "education", "model": "test-model"}
+        with override_settings(GEMINI_API_KEY="test-key"):
+            with patch("core.ai.generate_metadata", return_value=metadata):
+                response = self.client.post(reverse("core:generate_ai", args=[draft.pk]))
+            self.assertTrue(response.json()["ok"])
+            self.assertEqual(response.json()["title"], "Generated title")
+            with patch("core.ai.generate_metadata", side_effect=RuntimeError("quota exceeded")):
+                response = self.client.post(reverse("core:generate_ai", args=[draft.pk]))
+            self.assertTrue(response.json()["ok"])
+            self.assertIn("temporarily unavailable", response.json()["notice"])
+        draft.refresh_from_db()
+        self.assertEqual(draft.generation_status, AIContent.GenStatus.DONE)
+        self.assertEqual(draft.ai_model_used, "fallback")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"], GEMINI_API_KEY="test-key")
+class MediaAnalysisFlowTests(TestCase):
+    def setUp(self):
+        slot_patch = patch("core.media_analysis._slot", threading.BoundedSemaphore(1))
+        slot_patch.start()
+        self.addCleanup(slot_patch.stop)
+        self.user = get_user_model().objects.create_user(username="analysis-test")
+        self.client.force_login(self.user)
+        self.video = Video.objects.create(
+            user=self.user, file_url="https://example.com/clip.mp4",
+            original_filename="clip.mp4", source_size_bytes=1000,
+        )
+        self.draft = AIContent.objects.create(video=self.video, platform=Platform.YOUTUBE)
+        self.url = reverse("core:analyze_media", args=[self.video.pk])
+
+    @patch("core.media_analysis.threading.Thread")
+    def test_analysis_starts_once_and_polls_cached_result(self, thread):
+        from . import media_analysis
+
+        response = self.client.post(self.url, {"retry": "1"})
+        self.assertEqual(response.json(), {"ok": True, "status": "processing"})
+        self.assertEqual(self.client.post(self.url).json()["status"], "processing")
+        thread.assert_called_once()
+        self.video.refresh_from_db()
+        self.assertIsNotNone(self.video.ai_analysis_started_at)
+
+        observed = "A chef slices tomatoes and adds them to a pan."
+        def analyze(video):
+            Video.objects.filter(pk=video.pk).update(ai_media_analysis=observed)
+            return observed
+
+        with patch("core.media_analysis.ai.analyze_media", side_effect=analyze), \
+                patch("core.media_analysis.close_old_connections"), \
+                patch("core.media_analysis.connections.close_all"):
+            media_analysis._run(*thread.call_args.kwargs["args"])
+        response = self.client.post(self.url)
+        self.assertEqual(response.json()["analysis"], observed)
+        self.assertEqual(response.json()["status"], "done")
+        with patch("core.ai.generate_metadata", return_value={
+            "title": "Cooking tomatoes", "description": "A chef prepares tomatoes.",
+            "hashtags": "cooking", "model": "test-model",
+        }) as generate:
+            response = self.client.post(reverse("core:generate_ai", args=[self.draft.pk]))
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(response.json()["notice"], "")
+        self.assertEqual(generate.call_args.kwargs["media_analysis"], observed)
+
+    @patch("core.ai.generate_metadata")
+    def test_filename_alone_does_not_generate_a_draft(self, generate):
+        response = self.client.post(reverse("core:generate_ai", args=[self.draft.pk]))
+        self.assertFalse(response.json()["ok"])
+        self.assertIn("analysis is required", response.json()["error"])
+        generate.assert_not_called()
+
+    @patch("core.media_analysis.start", return_value="processing")
+    def test_failed_analysis_waits_for_explicit_retry(self, start):
+        self.video.ai_analysis_status = Video.AnalysisStatus.FAILED
+        self.video.save()
+        self.assertFalse(self.client.post(self.url).json()["ok"])
+        start.assert_not_called()
+        self.assertEqual(self.client.post(self.url, {"retry": "1"}).json()["status"], "processing")
+        start.assert_called_once()
+
+    @patch("core.media_analysis.start")
+    def test_analysis_limit_is_reported_instead_of_silent_fallback(self, start):
+        with patch("core.ai.MEDIA_ANALYSIS_MAX_BYTES", 100):
+            response = self.client.post(self.url)
+        self.assertEqual(response.json()["status"], "skipped")
+        self.assertFalse(response.json()["ok"])
+        self.assertIn("cap", response.json()["error"])
+        start.assert_not_called()
+
+    @patch("core.media_analysis.threading.Thread")
+    def test_interrupted_job_can_be_reclaimed(self, thread):
+        from . import media_analysis
+
+        self.video.ai_analysis_status = Video.AnalysisStatus.PROCESSING
+        self.video.ai_analysis_started_at = timezone.now() - dt.timedelta(hours=1)
+        self.video.save()
+        try:
+            self.assertEqual(self.client.post(self.url).json()["status"], "processing")
+            thread.assert_called_once()
+            self.video.refresh_from_db()
+            self.assertGreater(self.video.ai_analysis_started_at, timezone.now() - dt.timedelta(minutes=1))
+        finally:
+            if thread.called:
+                media_analysis._slot.release()
+
+    @patch("core.media_analysis.start")
+    def test_other_users_cannot_analyze_video(self, start):
+        other = get_user_model().objects.create_user(username="other-analysis-test")
+        self.client.force_login(other)
+        self.assertEqual(self.client.post(self.url).status_code, 404)
+        start.assert_not_called()
 
 
 @override_settings(

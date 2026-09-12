@@ -164,9 +164,14 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "anymail",   # HTTPS email backends (Brevo) for hosts that block SMTP
     "core",
 ]
+
+# Only register anymail when the Brevo API key is actually set — avoids a
+# startup crash if django-anymail isn't installed (common in local dev where
+# SMTP works fine and BREVO_API_KEY is blank).
+if BREVO_API_KEY:
+    INSTALLED_APPS.insert(-1, "anymail")  # before "core"
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

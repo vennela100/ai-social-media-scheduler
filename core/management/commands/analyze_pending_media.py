@@ -69,9 +69,17 @@ class Command(BaseCommand):
             # Best-effort: analyze_media caches on success and returns "" on any
             # failure (it logs the cause). We record the terminal status so the
             # cron doesn't re-attempt this video every tick.
-            text = ai.analyze_media(video)
+            try:
+                text = ai.analyze_media(video)
+            except ai.QuotaError as exc:
+                Video.objects.filter(pk=video.pk).update(
+                    ai_analysis_status=Status.FAILED, ai_analysis_error_code=exc.code,
+                )
+                self.stdout.write(str(exc))
+                failed += 1
+                break
             new_status = Status.DONE if text else Status.FAILED
-            Video.objects.filter(pk=video.pk).update(ai_analysis_status=new_status)
+            Video.objects.filter(pk=video.pk).update(ai_analysis_status=new_status, ai_analysis_error_code="")
             if text:
                 done += 1
             else:
