@@ -28,6 +28,7 @@ django-anymail>=10.0         # Brevo backend: send alert emails via HTTPS API
 
 # --- Phase 2: AI metadata ---
 google-genai>=1.0            # Gemini 2.5 Flash metadata generation
+imageio-ffmpeg>=0.6,<0.7     # bundled FFmpeg for temporary video analysis copies
 
 # --- Phase 3: YouTube OAuth + upload ---
 google-api-python-client>=2.0   # videos.insert resumable upload

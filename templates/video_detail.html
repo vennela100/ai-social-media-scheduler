@@ -276,10 +276,10 @@
       }
       function analyzeIfNeeded(cards) {
         if (!needsAnalysis()) return Promise.resolve();
-        var watching = "Watching your " + (grid.dataset.mediaType || "video") + "...";
+        var watching = grid.dataset.mediaType === "image" ? "Analyzing your image..." : "Analyzing your full video. Long videos may take several minutes...";
         (cards || []).forEach(function (card) { setState(card, "pending", watching); });
         if (!analysisPromise) {
-          var deadline = Date.now() + 20 * 60 * 1000;
+          var deadline = Date.now() + 4 * 60 * 60 * 1000;
           function poll(retry) {
             var controller = new AbortController();
             var timer = setTimeout(function () { controller.abort(); }, 30000);

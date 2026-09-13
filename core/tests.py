@@ -135,7 +135,7 @@ class MediaAnalysisFlowTests(TestCase):
         self.assertIsNotNone(self.video.ai_analysis_started_at)
 
         observed = "A chef slices tomatoes and adds them to a pan."
-        def analyze(video):
+        def analyze(video, on_progress=None):
             Video.objects.filter(pk=video.pk).update(ai_media_analysis=observed)
             return observed
 
@@ -173,12 +173,76 @@ class MediaAnalysisFlowTests(TestCase):
 
     @patch("core.media_analysis.start")
     def test_analysis_limit_is_reported_instead_of_silent_fallback(self, start):
+        self.video.media_type = "image"
+        self.video.save()
         with patch("core.ai.MEDIA_ANALYSIS_MAX_BYTES", 100):
             response = self.client.post(self.url)
         self.assertEqual(response.json()["status"], "skipped")
         self.assertFalse(response.json()["ok"])
         self.assertIn("cap", response.json()["error"])
         start.assert_not_called()
+
+    @patch("core.media_analysis.start", return_value="processing")
+    def test_large_long_video_can_retry_previously_skipped_analysis(self, start):
+        self.video.source_size_bytes = 566802530
+        self.video.duration_seconds = 3600
+        self.video.ai_analysis_status = Video.AnalysisStatus.SKIPPED
+        self.video.save()
+        response = self.client.post(self.url, {"retry": "1"})
+        self.assertEqual(response.json(), {"ok": True, "status": "processing"})
+        start.assert_called_once()
+
+    def test_long_job_renews_lease_and_finishes_with_new_ownership_timestamp(self):
+        from . import media_analysis
+
+        started = timezone.now() - dt.timedelta(minutes=2)
+        Video.objects.filter(pk=self.video.pk).update(
+            ai_analysis_status="processing", ai_analysis_started_at=started,
+        )
+
+        def analyze(video, on_progress):
+            on_progress()
+            video.refresh_from_db()
+            self.assertGreater(video.ai_analysis_started_at, started)
+            return "Complete observations."
+
+        with patch("core.media_analysis.ai.analyze_media", side_effect=analyze), \
+                patch("core.media_analysis.close_old_connections"), \
+                patch("core.media_analysis.connections.close_all"), \
+                patch("core.media_analysis._slot") as slot:
+            media_analysis._run(self.video.pk, started)
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.ai_analysis_status, "done")
+        self.assertIsNone(self.video.ai_analysis_started_at)
+        slot.release.assert_called_once()
+
+    def test_scheduled_analyzer_retries_skipped_video_with_same_lease(self):
+        self.video.ai_analysis_status = Video.AnalysisStatus.SKIPPED
+        self.video.save()
+
+        def analyze(video, on_progress):
+            video.refresh_from_db()
+            self.assertEqual(video.ai_analysis_status, "processing")
+            self.assertIsNotNone(video.ai_analysis_started_at)
+            on_progress()
+            Video.objects.filter(pk=video.pk).update(ai_media_analysis="Complete video observations.")
+            return "Complete video observations."
+
+        with patch("core.ai.analyze_media", side_effect=analyze), \
+                patch("core.media_analysis.close_old_connections"), \
+                patch("core.media_analysis.connections.close_all"):
+            call_command("analyze_pending_media", retry_failed=True, verbosity=0)
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.ai_analysis_status, "done")
+        self.assertIsNone(self.video.ai_analysis_started_at)
+
+    @patch("core.ai.analyze_media")
+    def test_scheduled_analyzer_does_not_duplicate_live_web_job(self, analyze):
+        self.video.ai_analysis_status = Video.AnalysisStatus.PROCESSING
+        self.video.ai_analysis_started_at = timezone.now()
+        self.video.save()
+        call_command("analyze_pending_media", verbosity=0)
+        analyze.assert_not_called()
 
     @patch("core.media_analysis.threading.Thread")
     def test_interrupted_job_can_be_reclaimed(self, thread):

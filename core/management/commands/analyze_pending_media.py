@@ -15,8 +15,10 @@ the result is cached on Video.ai_media_analysis and reused for every platform.
 import logging
 
 from django.core.management.base import BaseCommand
+from django.db.models import Q
+from django.utils import timezone
 
-from core import ai
+from core import ai, media_analysis
 from core.models import Video
 
 logger = logging.getLogger("scheduler")
@@ -36,7 +38,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--retry-failed", action="store_true",
-            help="Also re-attempt videos previously marked failed.",
+            help="Also re-attempt videos previously marked failed or skipped.",
         )
 
     def handle(self, *args, **options):
@@ -47,12 +49,17 @@ class Command(BaseCommand):
         Status = Video.AnalysisStatus
         wanted = [Status.PENDING]
         if options["retry_failed"]:
-            wanted.append(Status.FAILED)
+            wanted.extend([Status.FAILED, Status.SKIPPED])
 
         # Only videos that still have an analyzable file. Newest first so a fresh
         # upload gets grounded before older backlog.
         videos = list(
-            Video.objects.filter(ai_analysis_status__in=wanted, source_deleted=False)
+            Video.objects.filter(source_deleted=False).filter(
+                Q(ai_analysis_status__in=wanted)
+                | Q(ai_analysis_status=Status.PROCESSING,
+                    ai_analysis_started_at__lte=timezone.now() - media_analysis.LEASE_DURATION)
+                | Q(ai_analysis_status=Status.PROCESSING, ai_analysis_started_at__isnull=True)
+            )
             .exclude(file_url="")
             .order_by("-uploaded_at")[: options["limit"]]
         )
@@ -66,24 +73,21 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
-            # Best-effort: analyze_media caches on success and returns "" on any
-            # failure (it logs the cause). We record the terminal status so the
-            # cron doesn't re-attempt this video every tick.
-            try:
-                text = ai.analyze_media(video)
-            except ai.QuotaError as exc:
-                Video.objects.filter(pk=video.pk).update(
-                    ai_analysis_status=Status.FAILED, ai_analysis_error_code=exc.code,
-                )
-                self.stdout.write(str(exc))
-                failed += 1
-                break
-            new_status = Status.DONE if text else Status.FAILED
-            Video.objects.filter(pk=video.pk).update(ai_analysis_status=new_status, ai_analysis_error_code="")
-            if text:
+            # Share the web worker's lease and heartbeat to avoid analyzing the
+            # same long video twice when a browser and cron run concurrently.
+            if video.ai_media_analysis.strip():
+                Video.objects.filter(pk=video.pk).update(ai_analysis_status=Status.DONE)
                 done += 1
-            else:
+                continue
+            status = media_analysis.start(video, background=False)
+            if status == Status.DONE:
+                done += 1
+            elif status == Status.FAILED:
                 failed += 1
+                video.refresh_from_db()
+                if video.ai_analysis_error_code in ai.QUOTA_MESSAGES:
+                    self.stdout.write(ai.QUOTA_MESSAGES[video.ai_analysis_error_code])
+                    break
 
         self.stdout.write(self.style.SUCCESS(
             f"Media analysis: {done} analyzed, {skipped} skipped, {failed} failed "

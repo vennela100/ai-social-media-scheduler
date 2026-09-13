@@ -268,18 +268,38 @@
         });
       }
 
-      function putToR2(url, file, contentType) {
+      function putToR2(url, file, contentType, attempt) {
+        attempt = attempt || 1;
         return new Promise(function (resolve, reject) {
           var xhr = new XMLHttpRequest();
+          function failed(status) {
+            var temporary = status === 0 || status === 408 || status === 429 ||
+              status === 500 || status === 502 || status === 503 || status === 504;
+            if (temporary && attempt < 3) {
+              setProgress("Storage connection interrupted. Retrying upload (" + (attempt + 1) + "/3)...");
+              setTimeout(function () {
+                // Reuse this upload's unique object key so retries cannot create duplicates.
+                putToR2(url, file, contentType, attempt + 1).then(resolve, reject);
+              }, 2000 * Math.pow(2, attempt - 1));
+              return;
+            }
+            if (status === 0) {
+              reject(new Error("Could not connect to storage after 3 attempts. Check your internet connection; if it keeps failing, check the R2 bucket CORS settings."));
+            } else if (temporary) {
+              reject(new Error("Storage upload failed after 3 attempts (HTTP " + status + "). Please try again shortly. Your selected file and details are still here."));
+            } else {
+              reject(new Error("Storage rejected the upload (HTTP " + status + ")."));
+            }
+          }
           xhr.open("PUT", url);
           xhr.setRequestHeader("Content-Type", contentType);
           xhr.upload.onprogress = function (e) {
             if (e.lengthComputable) setProgress("Uploading… " + Math.round(e.loaded / e.total * 100) + "%");
           };
           xhr.onload = function () {
-            (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error("Storage rejected the upload (HTTP " + xhr.status + ")."));
+            (xhr.status >= 200 && xhr.status < 300) ? resolve() : failed(xhr.status);
           };
-          xhr.onerror = function () { reject(new Error("Storage upload was blocked by the browser. For large videos, check the Cloudflare R2 bucket CORS settings.")); };
+          xhr.onerror = function () { failed(0); };
           xhr.send(file);
         });
       }
