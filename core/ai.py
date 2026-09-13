@@ -390,7 +390,12 @@ def _is_transient_overload(exc) -> bool:
     if code == 503:
         return True
     text = str(exc).lower()
-    return "503" in text or "unavailable" in text or "overloaded" in text or "high demand" in text
+    return (
+        "503" in text or "unavailable" in text or "overloaded" in text
+        or "high demand" in text or "server disconnected" in text
+        or "connection reset" in text or "timed out" in text
+        or "deadline_exceeded" in text or "deadline exceeded" in text
+    )
 
 
 def _generate_with_retry(client, **kwargs):

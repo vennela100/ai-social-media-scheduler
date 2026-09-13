@@ -112,7 +112,9 @@ def prepared_segments(url, *, max_bytes, max_seconds, progress=lambda: None):
             raise TimeoutError("Video analysis exceeded its processing time budget.")
         progress()
 
-    seconds = max(1, min(240, max_seconds - 1)) if max_seconds else 240
+    # Two-minute inputs are more reliable for Gemini than one long context,
+    # while preserving the full timeline and audio.
+    seconds = max(1, min(120, max_seconds - 1)) if max_seconds else 120
     if max_bytes:
         # Reserve headroom for encoder bursts and container overhead (~100 KB/s).
         seconds = min(seconds, max(1, max_bytes // 120000 - 2))
