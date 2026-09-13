@@ -190,6 +190,31 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+## Long-video AI analysis
+
+The original video remains in R2 and is used for publishing. Analysis streams a
+temporary download to disk, then uses bundled FFmpeg to create H.264/AAC segments
+up to 720p at 12 fps, keeping the full duration and audio. Segments are at most
+four minutes long; every segment is analyzed in order and its observations are
+cached together for all platform drafts. A failed segment never counts as a
+complete analysis. Temporary downloads, copies, and Gemini files are cleaned up.
+
+`pip install -r requirements.txt` installs the FFmpeg binary on Windows/Linux;
+`IMAGEIO_FFMPEG_EXE` can override its path. `MEDIA_ANALYSIS_MAX_BYTES` and
+`MEDIA_ANALYSIS_MAX_SECONDS` now cap each compressed segment, rather than the
+original video. Previously skipped videos can be retried with Regenerate.
+
+Processing requires temporary disk space for the original (up to
+`R2_VIDEO_MAX_MB`, default 2048 MiB), up to 1 GiB of compressed copies, and 128 MiB
+of free-space reserve. Downloads are bounded to 15 minutes, encoding to one hour,
+and the overall analysis to four hours. One background analysis runs at a time
+per web process; its database lease is renewed during processing. Long videos use
+more Gemini requests/tokens and may still hit account quotas. Smaller copies can
+lose fine on-screen text; review generated copy before scheduling.
+
+The encoder uses FFmpeg's [segment muxer](https://ffmpeg.org/ffmpeg-formats.html#segment_002c-stream_005fsegment_002c-ssegment)
+and the [imageio-ffmpeg bundled executable](https://github.com/imageio/imageio-ffmpeg).
+
 ## Build Phases
 
 - [x] Phase 0 - Foundation: project, models, encrypted tokens, deploy config

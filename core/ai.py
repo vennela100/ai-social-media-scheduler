@@ -55,19 +55,18 @@ def quota_error(exc):
 
 # Caps for the (optional) video-analysis step. Downloading + uploading + waiting
 # for Gemini to process a clip is the slow part, so we bound each piece.
-VIDEO_DOWNLOAD_TIMEOUT = 120       # seconds to pull bytes from Cloudinary
+VIDEO_DOWNLOAD_TIMEOUT = 120       # seconds for a single HTTP read
 VIDEO_PROCESS_TIMEOUT = 90         # seconds to wait for Gemini to make it ACTIVE
 VIDEO_POLL_INTERVAL = 3            # seconds between state checks
 
-# Skip real media analysis for files bigger/longer than these — downloading a
-# huge clip and waiting on Gemini to process it risks OOM/timeouts on small
-# runners, so such videos degrade to text-only generation instead of crashing.
-# Env-overridable; set either to 0 to disable that particular check.
+# Env-overridable caps for each analysis input. Videos are compressed and split
+# before these checks; images retain their original byte cap. Zero disables a cap.
 def _env_int(name: str, default: int) -> int:
     raw = (os.environ.get(name) or "").strip()
     return int(raw) if raw else default
 
 
+# Video caps apply to compressed segments, never to the stored original.
 MEDIA_ANALYSIS_MAX_BYTES = _env_int("MEDIA_ANALYSIS_MAX_BYTES", 512 * 1024 * 1024)
 MEDIA_ANALYSIS_MAX_SECONDS = _env_int("MEDIA_ANALYSIS_MAX_SECONDS", 300)
 
@@ -209,7 +208,7 @@ def _client():
         )
     from google import genai  # imported lazily so the app loads without a key
 
-    return genai.Client(api_key=settings.GEMINI_API_KEY)
+    return genai.Client(api_key=settings.GEMINI_API_KEY, http_options={"timeout": 120000})
 
 
 def _build_prompt(platform: str, title: str, description: str, filename: str,
@@ -302,14 +301,14 @@ def _normalize(platform: str, data: dict) -> tuple[str, str, str]:
     return post.split("\n", 1)[0][:150], post, data.get("hashtags", "")
 
 
-def upload_for_analysis(video_url: str):
+def upload_for_analysis(video_url: str = "", *, local_path=None):
     """Download a video from its URL and upload it to the Gemini Files API.
 
     Returns a Gemini file handle once it's ACTIVE (ready to be referenced in a
     prompt), or None if anything goes wrong — callers fall back to brief-only
     generation, so this never raises into the request.
     """
-    if not video_url:
+    if not video_url and not local_path:
         return None
     gfile = None
     ready = False
@@ -318,14 +317,16 @@ def upload_for_analysis(video_url: str):
         suffix = os.path.splitext(video_url.split("?")[0])[1] or ".mp4"
         tmp_path = None
         try:
-            with requests.get(video_url, timeout=VIDEO_DOWNLOAD_TIMEOUT, stream=True) as resp:
-                resp.raise_for_status()
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    tmp_path = tmp.name
-                    for chunk in resp.iter_content(chunk_size=1 << 20):
-                        tmp.write(chunk)
-
-            gfile = client.files.upload(file=tmp_path)
+            if local_path:
+                gfile = client.files.upload(file=str(local_path))
+            else:
+                with requests.get(video_url, timeout=VIDEO_DOWNLOAD_TIMEOUT, stream=True) as resp:
+                    resp.raise_for_status()
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp_path = tmp.name
+                        for chunk in resp.iter_content(chunk_size=1 << 20):
+                            tmp.write(chunk)
+                gfile = client.files.upload(file=tmp_path)
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
@@ -497,32 +498,44 @@ def _analyze_image(client, image_url: str) -> str:
     return (response.text or "").strip()
 
 
-def _analyze_video(client, video_url: str) -> str:
-    """Upload a video to the Files API (polls until ACTIVE), describe it, clean up.
+def _analyze_video(client, video_url: str, on_progress=None) -> str:
+    """Analyze every compressed segment; never cache a partial video as complete."""
+    from .analysis_proxy import prepared_segments
 
-    Returns "" if the upload/processing didn't complete — upload_for_analysis
-    already swallows its own errors and returns None, so we degrade quietly.
-    """
-    gfile = upload_for_analysis(video_url)
-    if gfile is None:
-        return ""
-    try:
-        response = _generate_with_retry(
-            client, model=GEMINI_MODEL,
-            contents=[gfile, MEDIA_ANALYSIS_PROMPT.format(media="video")],
-        )
-        return (response.text or "").strip()
-    finally:
-        cleanup_analysis(gfile)
+    observations = []
+    with prepared_segments(
+        video_url, max_bytes=MEDIA_ANALYSIS_MAX_BYTES,
+        max_seconds=MEDIA_ANALYSIS_MAX_SECONDS, progress=on_progress or (lambda: None),
+    ) as (segments, tick):
+        for index, (path, start, end) in enumerate(segments, 1):
+            tick()
+            gfile = upload_for_analysis(local_path=path)
+            if gfile is None:
+                return ""
+            try:
+                prompt = MEDIA_ANALYSIS_PROMPT.format(media="video segment") + (
+                    f" This is segment {index} of {len(segments)}, covering seconds "
+                    f"{start:.1f} to {end:.1f} of the original video. "
+                    "Preserve the spoken topic, key explanations, names, steps, examples, "
+                    "and results, including what happens at the end of this segment. "
+                    "If speech or text is unclear, say so instead of guessing."
+                )
+                response = _generate_with_retry(client, model=GEMINI_MODEL, contents=[gfile, prompt])
+                observation = (response.text or "").strip()
+                if not observation:
+                    return ""
+                observations.append(f"[{start:.1f}–{end:.1f}s] {observation}")
+            finally:
+                cleanup_analysis(gfile)
+            path.unlink()
+        tick()
+    return "Full video observations (in chronological order):\n" + "\n\n".join(observations)
 
 
 def analysis_skip_reason(video) -> str | None:
-    """Why this media should NOT be analyzed (too big/long), or None if it's fine.
-
-    Decided from the size/duration captured at upload, so we bail BEFORE spending
-    time downloading. A 0 cap disables that check; a 0/unknown value on the video
-    means "we don't know" and does not trip the cap.
-    """
+    """Only reject oversized images; videos use temporary compressed segments."""
+    if getattr(video, "media_type", "video") == "video":
+        return None  # Original size/duration are handled by compressed segments.
     size = getattr(video, "source_size_bytes", 0) or 0
     if MEDIA_ANALYSIS_MAX_BYTES and size > MEDIA_ANALYSIS_MAX_BYTES:
         return f"file is {size} bytes (over {MEDIA_ANALYSIS_MAX_BYTES}-byte cap)"
@@ -532,7 +545,7 @@ def analysis_skip_reason(video) -> str | None:
     return None
 
 
-def analyze_media(video) -> str:
+def analyze_media(video, on_progress=None) -> str:
     """Produce and cache ONE neutral, factual description of what's in the media.
 
     Computed once from the real file and stored on Video.ai_media_analysis, then
@@ -554,7 +567,7 @@ def analyze_media(video) -> str:
         if video.media_type == "image":
             text = _analyze_image(client, video.file_url)
         else:
-            text = _analyze_video(client, video.file_url)
+            text = _analyze_video(client, video.file_url, on_progress=on_progress)
     except Exception as exc:  # download / SDK / parse — degrade to text-only
         quota = quota_error(exc)
         if quota:

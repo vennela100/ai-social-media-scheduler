@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
+from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -129,7 +130,15 @@ class MediaResourceCleanupTests(SimpleTestCase):
             cleanup.assert_not_called()
             return SimpleNamespace(text="The video shows a tutorial.")
         self.client.models.generate_content.side_effect = generate
-        self.assertEqual(ai._analyze_video(self.client, "https://example.com/video.mp4"), "The video shows a tutorial.")
+        @contextmanager
+        def prepared(*args, **kwargs):
+            path = self.temp_path / "part.mp4"
+            path.write_bytes(b"compressed video")
+            yield [(path, 0, 10)], lambda: None
+
+        with patch("core.analysis_proxy.prepared_segments", prepared):
+            result = ai._analyze_video(self.client, "https://example.com/video.mp4")
+        self.assertIn("The video shows a tutorial.", result)
         cleanup.assert_called_once_with(gfile)
         self.assertEqual(list(self.temp_path.iterdir()), [])
 

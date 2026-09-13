@@ -79,7 +79,7 @@ jobs:
     # a clip + waiting for Gemini to process it can exceed a web request timeout.
     # Separate job + concurrency group so it never delays the publish job above.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 250
     concurrency:
       group: analyze-media
       cancel-in-progress: false
@@ -103,4 +103,4 @@ jobs:
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           # Required for analysis; without it the command no-ops cleanly.
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python manage.py analyze_pending_media
+        run: python manage.py analyze_pending_media --limit 1
