@@ -195,7 +195,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 The original video remains in R2 and is used for publishing. Analysis streams a
 temporary download to disk, then uses bundled FFmpeg to create H.264/AAC segments
 up to 720p at 12 fps, keeping the full duration and audio. Segments are at most
-two minutes long; every segment is analyzed in order and its observations are
+four minutes long by default; every segment is analyzed in order and its observations are
 cached together for all platform drafts. A failed segment never counts as a
 complete analysis. Temporary downloads, copies, and Gemini files are cleaned up.
 
@@ -203,6 +203,11 @@ complete analysis. Temporary downloads, copies, and Gemini files are cleaned up.
 `IMAGEIO_FFMPEG_EXE` can override its path. `MEDIA_ANALYSIS_MAX_BYTES` and
 `MEDIA_ANALYSIS_MAX_SECONDS` now cap each compressed segment, rather than the
 original video. Previously skipped videos can be retried with Regenerate.
+
+Analysis segment length and FFmpeg CPU usage are configurable with
+`MEDIA_ANALYSIS_SEGMENT_SECONDS` (default `240`) and `FFMPEG_THREADS` (default
+`2`). Lower these values on a small instance if memory or Gemini rate limits
+become a concern.
 
 Processing requires temporary disk space for the original (up to
 `R2_VIDEO_MAX_MB`, default 2048 MiB), up to 1 GiB of compressed copies, and 128 MiB

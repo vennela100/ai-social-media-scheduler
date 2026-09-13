@@ -22,6 +22,11 @@ TRANSCODE_TIMEOUT = 60 * 60
 DISK_RESERVE = 128 * 1024 * 1024
 MAX_PROXY_BYTES = 1024 * 1024 * 1024
 
+# Analysis encoding is deliberately conservative on small Render instances,
+# but allowing this to be tuned avoids forcing every deployment to use a
+# single CPU thread.  Two threads is a good default for the current service.
+FFMPEG_THREADS = max(1, _integer("FFMPEG_THREADS", 2))
+
 
 def ffmpeg_executable():
     # Wheels include FFmpeg on Windows/Linux, including Render's Python runtime.
@@ -55,13 +60,13 @@ def transcode(source, directory, seconds, progress):
     manifest = directory / "segments.csv"
     command = [
         ffmpeg_executable(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        "-threads", "1", "-filter_threads", "1",
+        "-threads", str(FFMPEG_THREADS), "-filter_threads", str(FFMPEG_THREADS),
         "-protocol_whitelist", "file,pipe", "-i", str(source),
         "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1",
         "-vf", "fps=12,scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
         "-maxrate", "700k", "-bufsize", "1400k", "-pix_fmt", "yuv420p",
-        "-threads", "1", "-force_key_frames", f"expr:gte(t,n_forced*{seconds})",
+        "-threads", str(FFMPEG_THREADS), "-force_key_frames", f"expr:gte(t,n_forced*{seconds})",
         "-c:a", "aac", "-b:a", "64k", "-ac", "1",
         "-f", "segment", "-segment_time", str(seconds),
         "-segment_time_delta", "0.05", "-reset_timestamps", "1",
@@ -112,9 +117,11 @@ def prepared_segments(url, *, max_bytes, max_seconds, progress=lambda: None):
             raise TimeoutError("Video analysis exceeded its processing time budget.")
         progress()
 
-    # Two-minute inputs are more reliable for Gemini than one long context,
-    # while preserving the full timeline and audio.
-    seconds = max(1, min(120, max_seconds - 1)) if max_seconds else 120
+    # Four-minute inputs reduce Gemini round trips while remaining safely below
+    # the default five-minute per-segment cap. Deployments can tune this down
+    # with MEDIA_ANALYSIS_SEGMENT_SECONDS if their model/quota needs it.
+    segment_seconds = _integer("MEDIA_ANALYSIS_SEGMENT_SECONDS", 240)
+    seconds = max(1, min(segment_seconds, max_seconds - 1)) if max_seconds else segment_seconds
     if max_bytes:
         # Reserve headroom for encoder bursts and container overhead (~100 KB/s).
         seconds = min(seconds, max(1, max_bytes // 120000 - 2))
