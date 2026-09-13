@@ -609,3 +609,42 @@ class R2DirectUploadTests(TestCase):
         self.assertTrue(video.source_deleted)
         self.assertEqual(video.source_size_bytes, 0)
         self.assertEqual(video.thumbnail_url, "https://res.cloudinary.com/thumb.jpg")
+
+    @patch.dict("os.environ", R2_TEST_ENV)
+    @patch("core.views.delete_media")
+    @patch("core.views.r2.delete_object")
+    def test_delete_all_removes_r2_sources_thumbnails_and_rows(self, delete_object, delete_media):
+        from core.views import _purge_user_videos
+
+        Video.objects.create(
+            user=self.user,
+            file_url="https://pub-test.r2.dev/videos/1/k/a.mp4",
+            r2_object_key=f"videos/{self.user.id}/k/a.mp4",
+            thumbnail_public_id="thumb/a", source_size_bytes=100,
+            original_filename="a.mp4",
+        )
+        Video.objects.create(
+            user=self.user,
+            file_url="https://res.cloudinary.com/source.jpg",
+            cloudinary_public_id="source/b", thumbnail_public_id="thumb/b",
+            source_size_bytes=200, media_type="image", original_filename="b.jpg",
+        )
+        result = _purge_user_videos(self.user)
+        self.assertEqual(result, {"deleted": 2, "failed": 0, "freed_bytes": 300})
+        self.assertFalse(Video.objects.filter(user=self.user).exists())
+        delete_object.assert_called_once_with(f"videos/{self.user.id}/k/a.mp4")
+        self.assertEqual(delete_media.call_count, 3)
+
+    @patch("core.views.delete_media", side_effect=[RuntimeError("Cloudinary unavailable"), None])
+    def test_delete_all_keeps_row_when_remote_delete_fails(self, delete_media):
+        from core.views import _purge_user_videos
+
+        video = Video.objects.create(
+            user=self.user, file_url="https://res.cloudinary.com/source.jpg",
+            cloudinary_public_id="source/fails", source_size_bytes=500,
+            original_filename="fails.jpg",
+        )
+        result = _purge_user_videos(self.user)
+        self.assertEqual(result["deleted"], 0)
+        self.assertEqual(result["failed"], 1)
+        self.assertTrue(Video.objects.filter(pk=video.pk).exists())

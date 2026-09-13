@@ -751,8 +751,29 @@ def _purge_user_videos(user):
     the thumbnail (video.thumbnail_public_id, media_type="image") — mirror how
     video_delete() does it. Tally results and return the counts above.
     """
-    # TODO(you): implement the purge loop + your chosen failure policy (≈8-10 lines).
-    raise NotImplementedError
+    result = {"deleted": 0, "failed": 0, "freed_bytes": 0}
+    for video in Video.objects.filter(user=user):
+        try:
+            # Archived sources have already been removed; their thumbnails still
+            # need deleting. Keep the R2 key/source guarded by source_deleted so
+            # a historical key does not turn a successful purge into a failure.
+            if not video.source_deleted:
+                if video.r2_object_key:
+                    r2.delete_object(video.r2_object_key)
+                if video.cloudinary_public_id:
+                    delete_media(video.cloudinary_public_id, media_type=video.media_type)
+            if video.thumbnail_public_id:
+                delete_media(video.thumbnail_public_id, media_type="image")
+        except Exception as exc:
+            # Keep the row when remote deletion fails: the user can retry without
+            # losing the identifier needed to remove a possible orphan.
+            result["failed"] += 1
+            logger.warning("Storage purge failed for video %s: %s", video.pk, exc)
+            continue
+        result["freed_bytes"] += video.source_size_bytes or 0
+        video.delete()
+        result["deleted"] += 1
+    return result
 
 
 @require_POST
