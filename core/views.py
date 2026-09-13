@@ -6,6 +6,7 @@ flow (browser -> Cloudinary -> Video row). Real features build on this.
 
 import datetime as dt
 import logging
+import threading
 
 from django.conf import settings
 from django.contrib import messages
@@ -785,32 +786,30 @@ def storage_delete_all(request):
     wants ALL their source files and Cloudinary assets gone to reclaim space. The
     template guards this with a typed/double confirmation since it's irreversible.
     """
-    try:
-        result = _purge_user_videos(request.user)
-    except NotImplementedError:
-        messages.error(
-            request,
-            "Delete-all isn't finished yet (the purge step is a pending learning-mode "
-            "contribution). Nothing was deleted.",
-        )
-        return redirect("core:storage")
+    # R2/Cloudinary deletes are network operations. Running them in the request
+    # can exceed Render's proxy timeout and surface as HTTP 502. Claim the work
+    # here and let the existing purge helper handle each asset independently.
+    # The helper keeps rows whose remote deletion failed, so a later retry is safe.
+    user_id = request.user.pk
 
-    deleted, failed = result["deleted"], result["failed"]
-    if not deleted and not failed:
-        messages.info(request, "Nothing to delete — you have no uploads.")
-    elif failed:
-        messages.warning(
-            request,
-            f"Deleted {deleted} video{'s' if deleted != 1 else ''}, but {failed} "
-            f"couldn't be fully removed from storage. Try again to retry those.",
-        )
-    else:
-        freed = human_bytes(result.get("freed_bytes", 0))
-        messages.success(
-            request,
-            f"Deleted all {deleted} video{'s' if deleted != 1 else ''} and freed {freed}. "
-            "This also removed their drafts and scheduled posts.",
-        )
+    def purge_in_background():
+        from django.contrib.auth import get_user_model
+
+        try:
+            user = get_user_model().objects.get(pk=user_id)
+            result = _purge_user_videos(user)
+            logger.info(
+                "Delete-all completed for user %s: deleted=%s failed=%s freed_bytes=%s",
+                user_id, result["deleted"], result["failed"], result["freed_bytes"],
+            )
+        except Exception:
+            logger.exception("Delete-all failed for user %s", user_id)
+
+    threading.Thread(target=purge_in_background, daemon=True, name=f"purge-user-{user_id}").start()
+    messages.info(
+        request,
+        "Delete-all started. Your uploads are being removed from storage; refresh this page in a moment.",
+    )
     return redirect("core:storage")
 
 
