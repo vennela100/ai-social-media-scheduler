@@ -26,6 +26,31 @@ def quota_response(quota_id):
 
 
 class QuotaAndHashtagTests(SimpleTestCase):
+    @patch("core.ai.time.sleep")
+    @patch("core.ai.time.time")
+    def test_background_budget_retries_disconnect_after_95_seconds(self, now, sleep):
+        import httpx
+
+        now.side_effect = lambda: 1000 if now.call_count == 1 else 1095
+        client = Mock()
+        expected = SimpleNamespace(text="Observed the full segment.")
+        client.models.generate_content.side_effect = [
+            httpx.RemoteProtocolError("Server disconnected without sending a response."), expected,
+        ]
+        result = ai._generate_with_retry(client, retry_budget_seconds=300, contents="video")
+        self.assertIs(result, expected)
+        self.assertEqual(client.models.generate_content.call_count, 2)
+        sleep.assert_called_once()
+
+    @patch("core.ai.time.sleep")
+    def test_permanent_bad_request_is_not_retried(self, sleep):
+        client = Mock()
+        client.models.generate_content.side_effect = ClientError(400, {"message": "Invalid request"})
+        with self.assertRaises(ClientError):
+            ai._generate_with_retry(client, retry_budget_seconds=300, contents="video")
+        client.models.generate_content.assert_called_once()
+        sleep.assert_not_called()
+
     def test_daily_and_minute_limits_have_distinct_messages(self):
         daily = ai.quota_error(quota_response("GenerateRequestsPerDayPerProjectPerModel-FreeTier"))
         minute = ai.quota_error(quota_response("GenerateContentInputTokensPerModelPerMinute-FreeTier"))

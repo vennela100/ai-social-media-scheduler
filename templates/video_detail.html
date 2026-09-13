@@ -280,48 +280,47 @@
         (cards || []).forEach(function (card) { setState(card, "pending", watching); });
         if (!analysisPromise) {
           var deadline = Date.now() + 4 * 60 * 60 * 1000;
-          function poll(retry) {
-            var controller = new AbortController();
-            // Render can cold-start and long-video analysis can briefly occupy
-            // the worker. Give each status request two minutes before retrying.
-            var timer = setTimeout(function () { controller.abort("analysis poll timeout"); }, 120000);
-            return fetch(grid.dataset.analyzeUrl, {
-              method: "POST", signal: controller.signal,
-              headers: { "X-CSRFToken": csrftoken, "Content-Type": "application/x-www-form-urlencoded" },
-              body: retry ? "retry=1" : ""
-            })
-              .then(function (r) {
+          async function poll(retry) {
+            while (Date.now() < deadline) {
+              var controller = new AbortController();
+              var timer = setTimeout(function () { controller.abort(); }, 120000);
+              var d;
+              try {
+                var r = await fetch(grid.dataset.analyzeUrl, {
+                  method: "POST", signal: controller.signal,
+                  headers: { "X-CSRFToken": csrftoken, "Content-Type": "application/x-www-form-urlencoded" },
+                  body: retry ? "retry=1" : ""
+                });
                 if (r.redirected || r.status === 403) throw new Error("Your session expired. Refresh the page and try again.");
                 if (!r.ok) throw new Error("Video analysis is unavailable. Regenerate to retry.");
-                return r.json();
-              })
-              .finally(function () { clearTimeout(timer); })
-              .then(function (d) {
-                if (!d.ok) {
-                  var error = new Error(d.error || "Couldn't analyze this file. Regenerate to retry.");
-                  error.code = d.error_code;
-                  throw error;
-                }
-                if (d.analysis) {
-                  showAnalysis(d.analysis);
-                  analysisStatus = "done";
-                  grid.dataset.analysisStatus = "done";
-                  return;
-                }
-                if (Date.now() >= deadline) throw new Error("Analysis is taking too long. Regenerate to check again.");
-                if (d.status !== "pending" && d.status !== "processing") throw new Error("No video analysis was returned. Regenerate to retry.");
-                return new Promise(function (resolve) { setTimeout(resolve, 3000); })
-                  .then(function () { return poll(false); });
-              })
-              .catch(function (error) {
-                // A timed-out poll is not an analysis failure. Keep the same
-                // overall deadline and ask the server for status again.
-                if (error && error.name === "AbortError" && Date.now() < deadline) {
-                  return new Promise(function (resolve) { setTimeout(resolve, 2000); })
-                    .then(function () { return poll(false); });
-                }
+                d = await r.json();
+              } catch (error) {
+                // Fetch may reject with AbortError, TypeError, or a custom
+                // reason. The signal is the reliable indication of our timeout.
+                if (!controller.signal.aborted) throw error;
+                clearTimeout(timer);
+                retry = false;
+                await new Promise(function (resolve) { setTimeout(resolve, 2000); });
+                continue;
+              } finally {
+                clearTimeout(timer);
+              }
+              if (!d.ok) {
+                var error = new Error(d.error || "Couldn't analyze this file. Regenerate to retry.");
+                error.code = d.error_code;
                 throw error;
-              });
+              }
+              if (d.analysis) {
+                showAnalysis(d.analysis);
+                analysisStatus = "done";
+                grid.dataset.analysisStatus = "done";
+                return;
+              }
+              if (d.status !== "pending" && d.status !== "processing") throw new Error("No video analysis was returned. Regenerate to retry.");
+              retry = false;
+              await new Promise(function (resolve) { setTimeout(resolve, 3000); });
+            }
+            throw new Error("Analysis is taking too long. Regenerate to check again.");
           }
           analysisPromise = poll(true).finally(function () { analysisPromise = null; });
         }

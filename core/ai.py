@@ -373,21 +373,19 @@ def cleanup_analysis(gfile) -> None:
 GENERATE_MAX_ATTEMPTS = _env_int("GENERATE_MAX_ATTEMPTS", 2)
 GENERATE_RETRY_BASE_DELAY = 1.5  # seconds; doubles each retry (1.5s, 3s, ...)
 
-# Hard wall-clock cap on a single generate_content call (including retries).
-# Prevents a hanging Gemini response from tying up a gunicorn worker forever,
-# which would eventually starve Render's /healthz/ check and trigger alerts.
+# Budget for starting retries on ordinary metadata requests. Each individual
+# SDK request has its own HTTP timeout; video analysis uses a longer retry budget.
 GENERATE_TIMEOUT = _env_int("GENERATE_TIMEOUT", 25)  # seconds
 
 
 def _is_transient_overload(exc) -> bool:
-    """True only for retryable Gemini overloads (503), not genuine failures.
-
-    A 503 means "try again later"; a bad API key, quota exhaustion (429), or an
-    unparseable response will not fix themselves on retry, so we don't waste time
-    looping on those — they fail fast and reach the user as an actionable error.
-    """
+    """Recognize temporary server/transport failures; quota errors are handled separately."""
     code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    if code == 503:
+    if str(code) in {"500", "502", "503", "504"}:
+        return True
+    import httpx
+
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
         return True
     text = str(exc).lower()
     return (
@@ -398,13 +396,14 @@ def _is_transient_overload(exc) -> bool:
     )
 
 
-def _generate_with_retry(client, **kwargs):
+def _generate_with_retry(client, *, retry_budget_seconds=None, **kwargs):
     """Call generate_content, retrying transient overloads with backoff.
 
-    Also enforces GENERATE_TIMEOUT as a wall-clock cap so a single call can
-    never block a worker longer than that (important for health-check liveness).
+    The budget bounds starting additional attempts; the SDK's HTTP timeout
+    bounds each request. Background video analysis needs enough budget to retry
+    after a slow disconnect, not just after immediate overload responses.
     """
-    deadline = time.time() + GENERATE_TIMEOUT
+    deadline = time.time() + (GENERATE_TIMEOUT if retry_budget_seconds is None else retry_budget_seconds)
     for attempt in range(1, GENERATE_MAX_ATTEMPTS + 1):
         try:
             return client.models.generate_content(**kwargs)
@@ -525,7 +524,10 @@ def _analyze_video(client, video_url: str, on_progress=None) -> str:
                     "and results, including what happens at the end of this segment. "
                     "If speech or text is unclear, say so instead of guessing."
                 )
-                response = _generate_with_retry(client, model=GEMINI_MODEL, contents=[gfile, prompt])
+                response = _generate_with_retry(
+                    client, model=GEMINI_MODEL, contents=[gfile, prompt],
+                    retry_budget_seconds=300,
+                )
                 observation = (response.text or "").strip()
                 if not observation:
                     return ""

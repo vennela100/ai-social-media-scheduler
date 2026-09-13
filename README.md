@@ -195,7 +195,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 The original video remains in R2 and is used for publishing. Analysis streams a
 temporary download to disk, then uses bundled FFmpeg to create H.264/AAC segments
 up to 720p at 12 fps, keeping the full duration and audio. Segments are at most
-four minutes long; every segment is analyzed in order and its observations are
+two minutes long; every segment is analyzed in order and its observations are
 cached together for all platform drafts. A failed segment never counts as a
 complete analysis. Temporary downloads, copies, and Gemini files are cleaned up.
 
@@ -211,6 +211,15 @@ and the overall analysis to four hours. One background analysis runs at a time
 per web process; its database lease is renewed during processing. Long videos use
 more Gemini requests/tokens and may still hit account quotas. Smaller copies can
 lose fine on-screen text; review generated copy before scheduling.
+
+To verify the real local upload and generation flow, run
+`python scripts/verify_video_flow.py --source-video <local-video-id>` while the
+local server is running on port 8002. It uploads a labelled copy of that video
+to R2, uses the application's HTTP analysis/generation endpoints, and requires
+non-fallback Gemini drafts for YouTube, Instagram, and LinkedIn. It leaves the
+verification upload available for review without scheduling or publishing it.
+This opt-in check uses real storage and Gemini quota; normal tests use mocks.
+Run `node scripts/test_analysis_poll.cjs` for browser timeout/retry checks.
 
 The encoder uses FFmpeg's [segment muxer](https://ffmpeg.org/ffmpeg-formats.html#segment_002c-stream_005fsegment_002c-ssegment)
 and the [imageio-ffmpeg bundled executable](https://github.com/imageio/imageio-ffmpeg).
